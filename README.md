@@ -10,7 +10,7 @@ Scaffold only: the app opens a window with a placeholder camera, light and groun
 
 ## Run
 
-Linux needs ALSA and udev headers (Debian/Ubuntu: `sudo apt install libasound2-dev libudev-dev pkg-config`). See Bevy's [Linux dependencies](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md) for other distributions.
+Linux needs ALSA, udev and Wayland headers (Debian/Ubuntu: `sudo apt install libasound2-dev libudev-dev libwayland-dev pkg-config`). See Bevy's [Linux dependencies](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md) for other distributions.
 
 ```sh
 cargo run --features dev   # development: faster rebuilds, asset hot reloading
