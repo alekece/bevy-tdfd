@@ -1,0 +1,29 @@
+[package]
+name = "bevy-tdfd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+# Faster rebuilds and asset hot reloading during development: `cargo run --features dev`.
+dev = ["bevy/dynamic_linking", "bevy/file_watcher"]
+
+[dependencies]
+bevy = "0.20.1"
+
+# Bevy systems routinely take many parameters and nested query types; Bevy allows these too.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+# Compile our code with light optimizations and dependencies fully optimized,
+# so debug builds stay playable without long compile times.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

@@ -1,0 +1,12 @@
+# Build output
+/target
+**/*.rs.bk
+rustc-ice-*.txt
+
+# Local development
+.worktrees/
+/docs/plans/
+
+# Blender backups; the .blend sources themselves are committed
+*.blend1
+*.blend2
