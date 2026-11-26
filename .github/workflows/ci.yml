@@ -20,7 +20,7 @@ jobs:
     name: Rust format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # rustfmt.toml uses group_imports, which only nightly rustfmt supports
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -31,7 +31,7 @@ jobs:
     name: Rust clippy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -44,7 +44,7 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev pkg-config
       - uses: Swatinem/rust-cache@v2
