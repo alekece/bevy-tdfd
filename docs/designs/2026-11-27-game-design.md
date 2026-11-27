@@ -56,13 +56,14 @@ equipment → defend the warp crystal from the waves.
 - **Walls are level terrain**, not purchases. They shape the paths. The map is mostly plant plots and
   paths.
 - **Plant plots** line the paths.
-- **Defenders** can be placed anywhere, but their action areas must not overlap (or only slightly).
-  Placement shows whether the position is valid. Plants may sit inside a defender's area.
+- **Defenders** can be placed anywhere, but their action areas must not overlap. Placement shows whether
+  the position is valid. Plants may sit inside a defender's area.
 
 ### Start
 
 - The player picks easy, normal or hard. Difficulty sets the starting seeds and gold.
-- Every level starts with the rabbit couple: two farmer rabbits. Nothing else is placed or owned.
+- Every level starts with the farmer and the rabbit couple: two farmer rabbits. No crops or defenders are
+  placed yet.
 
 ### Win, loss and score
 
