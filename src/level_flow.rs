@@ -11,18 +11,14 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::combat::Health;
 use crate::enemies::EnemiesConfig;
-use crate::game::{AppState, Difficulty, GameSet, LevelClock, SelectedDifficulty, Timeline};
+use crate::game::{
+    AppState, Difficulty, GameSet, LevelClock, LevelOutcome, LevelStatus, SelectedDifficulty,
+    Timeline,
+};
 use crate::map::Crystal;
 
 const MENU_BACKGROUND: Color = Color::srgb(0.13, 0.18, 0.2);
 const BUTTON_COLOR: Color = Color::srgb(0.28, 0.44, 0.34);
-
-/// Whether the level was won or lost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LevelOutcome {
-    Victory,
-    Defeat,
-}
 
 /// The result of the most recently played level.
 #[derive(Debug, Clone, Copy)]
@@ -275,38 +271,31 @@ fn check_level_end(
     clock: Res<LevelClock>,
     timeline: Res<Timeline>,
     crystals: Query<&Health, With<Crystal>>,
+    mut status: ResMut<LevelStatus>,
     mut result: ResMut<LevelResults>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    if result.0.is_some() {
-        return;
-    }
-
     let mut crystal_health = crystals.iter();
-    let Some(crystal) = crystal_health.next() else {
-        result.0 = Some(LevelResult {
+
+    let level_result = match crystal_health.next() {
+        None => LevelResult {
             outcome: LevelOutcome::Defeat,
             crystal_health_percent: 0.0,
-        });
-        next_state.set(AppState::Results);
+        },
+        Some(_) if crystal_health.next().is_some() => {
+            error!("A level must have exactly one warp crystal");
 
-        return;
+            return;
+        }
+        Some(_) if !timeline.is_complete(clock.elapsed()) => return,
+        Some(crystal) => LevelResult {
+            outcome: LevelOutcome::Victory,
+            crystal_health_percent: crystal.current() / crystal.max() * 100.0,
+        },
     };
 
-    if crystal_health.next().is_some() {
-        error!("A level must have exactly one warp crystal");
-
-        return;
-    }
-
-    if !timeline.is_complete(clock.elapsed()) {
-        return;
-    }
-
-    result.0 = Some(LevelResult {
-        outcome: LevelOutcome::Victory,
-        crystal_health_percent: crystal.current() / crystal.max() * 100.0,
-    });
+    *status = LevelStatus::Ended(level_result.outcome);
+    result.0 = Some(level_result);
     next_state.set(AppState::Results);
 }
 
@@ -375,6 +364,8 @@ fn return_to_menu(keys: Res<ButtonInput<KeyCode>>, mut next_state: ResMut<NextSt
 mod tests {
     use std::time::Duration;
 
+    use bevy::time::TimeUpdateStrategy;
+
     use super::*;
     use crate::combat::{CombatPlugin, Health};
     use crate::economy::{EconomyConfig, EconomyPlugin, Gold};
@@ -383,7 +374,8 @@ mod tests {
         FarmingConfig, FarmingPlugin, GrowthBoost, ManaConfig, RabbitConfig, SeedStock, TomatoBonus,
     };
     use crate::game::{
-        AppState, Difficulty, DifficultySettings, SelectedDifficulty, Timeline, testing::TestApp,
+        AppState, Difficulty, DifficultySettings, SelectedDifficulty, Timeline,
+        testing::{STEP, TestApp},
     };
     use crate::map::{Crystal, MapLayout, MonsterPath};
     use crate::stage::CursorGround;
@@ -535,6 +527,32 @@ mod tests {
                 .unwrap()
                 .crystal_health_percent(),
             55.0
+        );
+    }
+
+    #[test]
+    fn level_stops_on_the_tick_it_ends() {
+        let mut app = flow_app();
+        app.world_mut()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(STEP * 4));
+        let crystal = app
+            .world_mut()
+            .query_filtered::<Entity, With<Crystal>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().despawn(crystal);
+        let before = app.world().resource::<LevelClock>().elapsed();
+
+        // One frame runs four fixed ticks; only the first one, which ends the level, simulates.
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<LevelClock>().elapsed(),
+            before + STEP
+        );
+        assert_eq!(
+            *app.world().resource::<LevelStatus>(),
+            LevelStatus::Ended(LevelOutcome::Defeat)
         );
     }
 

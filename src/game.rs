@@ -112,14 +112,37 @@ impl LevelClock {
     }
 }
 
-/// Schedule sets every gameplay plugin joins. All of them only run while a level is played.
+/// Whether the level was won or lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelOutcome {
+    Victory,
+    Defeat,
+}
+
+/// Whether the level being played still runs. Set to [`LevelStatus::Ended`] on the tick the level
+/// ends, so the remaining fixed ticks of that frame simulate nothing before the state changes.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LevelStatus {
+    #[default]
+    Running,
+    Ended(LevelOutcome),
+}
+
+/// Schedule sets every gameplay plugin joins. All of them only run while a level is played and
+/// [`LevelStatus::Running`].
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameSet {
     /// `Update`: turn player input into orders.
     Input,
     /// `FixedUpdate`: advance the level clock.
     Clock,
-    /// `FixedUpdate`: entities act (move, grow, attack) and send messages.
+    /// `FixedUpdate`: bring new entities into the level (waves).
+    Spawn,
+    /// `FixedUpdate`: each agent picks its intent for this tick.
+    Decide,
+    /// `FixedUpdate`: agents move according to their intent.
+    Move,
+    /// `FixedUpdate`: entities act (grow, attack, work) and send messages.
     Act,
     /// `FixedUpdate`: apply the consequences of the actions (damage and deaths).
     Resolve,
@@ -175,30 +198,41 @@ impl Plugin for GamePlugin {
         app.init_state::<AppState>()
             .init_resource::<SelectedDifficulty>()
             .init_resource::<LevelClock>()
+            .init_resource::<LevelStatus>()
             .configure_sets(
                 Update,
                 (GameSet::Input, GameSet::Presentation)
                     .chain()
-                    .run_if(in_state(AppState::InLevel)),
+                    .run_if(in_state(AppState::InLevel))
+                    .run_if(level_running),
             )
             .configure_sets(
                 FixedUpdate,
                 (
                     GameSet::Clock,
+                    GameSet::Spawn,
+                    GameSet::Decide,
+                    GameSet::Move,
                     GameSet::Act,
                     GameSet::Resolve,
                     GameSet::Outcome,
                 )
                     .chain()
-                    .run_if(in_state(AppState::InLevel)),
+                    .run_if(in_state(AppState::InLevel))
+                    .run_if(level_running),
             )
-            .add_systems(OnEnter(AppState::InLevel), reset_level_clock)
+            .add_systems(OnEnter(AppState::InLevel), start_level_clock)
             .add_systems(FixedUpdate, advance_level_clock.in_set(GameSet::Clock));
     }
 }
 
-fn reset_level_clock(mut clock: ResMut<LevelClock>) {
+fn level_running(status: Res<LevelStatus>) -> bool {
+    *status == LevelStatus::Running
+}
+
+fn start_level_clock(mut clock: ResMut<LevelClock>, mut status: ResMut<LevelStatus>) {
     clock.elapsed = Duration::ZERO;
+    *status = LevelStatus::Running;
 }
 
 fn advance_level_clock(time: Res<Time>, mut clock: ResMut<LevelClock>) {
@@ -216,7 +250,7 @@ pub mod testing {
     use super::*;
 
     /// One fixed timestep at Bevy's default 64 Hz.
-    const STEP: Duration = Duration::from_micros(15_625);
+    pub const STEP: Duration = Duration::from_micros(15_625);
 
     /// Headless test helpers for [`App`].
     pub trait TestApp {
