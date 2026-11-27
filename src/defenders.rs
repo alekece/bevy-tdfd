@@ -12,7 +12,8 @@ use serde::Deserialize;
 use crate::combat::{Damage, Health};
 use crate::economy::{EconomyConfig, Gold};
 use crate::enemies::Ant;
-use crate::game::{AppState, GameSet, GroundMovement, GroundPosition};
+use crate::game::{AppState, GameSet, GroundPosition};
+use crate::movement::GroundMovement;
 use crate::stage::CursorGround;
 
 const FIELD_HALF_SIZE: f32 = 9.5;

@@ -164,32 +164,6 @@ impl GroundPosition for Vec2 {
     }
 }
 
-/// Moves a walker on the ground plane.
-pub trait GroundMovement {
-    /// Moves at most `max_distance` towards `target`, facing it, and stops `stop_distance` away from it.
-    /// Returns whether the walker is within `stop_distance` of the target.
-    fn move_towards(&mut self, target: Vec2, max_distance: f32, stop_distance: f32) -> bool;
-}
-
-impl GroundMovement for Transform {
-    fn move_towards(&mut self, target: Vec2, max_distance: f32, stop_distance: f32) -> bool {
-        let position = self.translation.xz();
-        let remaining = position.distance(target) - stop_distance;
-
-        if remaining <= 0.0 {
-            return true;
-        }
-
-        let direction = (target - position).normalize();
-        let step = direction * remaining.min(max_distance);
-
-        self.translation += step.on_ground();
-        self.look_to(direction.on_ground(), Vec3::Y);
-
-        remaining <= max_distance
-    }
-}
-
 /// Owns the game states, the shared schedule sets and the level clock.
 pub struct GamePlugin;
 

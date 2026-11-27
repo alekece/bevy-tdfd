@@ -13,10 +13,9 @@ use bevy::prelude::*;
 use serde::Deserialize;
 
 use crate::combat::Health;
-use crate::game::{
-    AppState, DifficultySettings, GameSet, GroundMovement, GroundPosition, SelectedDifficulty,
-};
+use crate::game::{AppState, DifficultySettings, GameSet, GroundPosition, SelectedDifficulty};
 use crate::map::{MapLayout, PlantPlot};
+use crate::movement::GroundMovement;
 use crate::stage::CursorGround;
 
 /// How close a rabbit gets to a crop or its home to work there, in world units.

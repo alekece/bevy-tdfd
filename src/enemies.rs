@@ -11,8 +11,9 @@ use serde::Deserialize;
 
 use crate::combat::{Damage, Health};
 use crate::farming::{Crop, Threat};
-use crate::game::{AppState, GameSet, GroundMovement, GroundPosition, LevelClock};
+use crate::game::{AppState, GameSet, GroundPosition, LevelClock};
 use crate::map::{Crystal, MapLayout, Spawner};
+use crate::movement::GroundMovement;
 
 const ANT_COLOR: Color = Color::srgb(0.1, 0.48, 0.16);
 const REACH: f32 = 0.65;
