@@ -68,7 +68,7 @@ These rules shape every other Bevy rule below. When a Rust rule seems to conflic
 
 - One plugin per gameplay responsibility (map, movement, combat, farming, waves, economy, ...), in its own module. A plugin owns its components, resources, messages and systems, and registers them all in its `build`.
 - Plugins talk through a small set of shared components (`Health`, ...), messages, observers, states and system sets; never by querying another plugin's private components. A concept two plugins need moves to a shared module.
-- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor or its data instead of hard-coding the content it serves. Make configurable what actually varies between its real uses, including the variants in an approved design.
+- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor or its data instead of hard-coding the content it serves. Make configurable what actually varies between its real uses, including the designed variants of the current step's content.
 - When a plugin needs another one, it depends only on that plugin's public surface and says so in its `//!` overview.
 - Keep `main.rs` to app setup: window, default plugins and the list of game plugins.
 - Gate debug-only plugins (inspector, gizmos, cheats) behind the `dev` feature.
