@@ -5,7 +5,7 @@
     difficulties: (
         easy: (seeds: 5, gold: 30),
         normal: (seeds: 3, gold: 15),
-        hard: (seeds: 1, gold: 0),
+        hard: (seeds: 1, gold: 10),
     ),
     timeline: (
         length: "4m",

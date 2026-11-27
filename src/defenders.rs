@@ -18,6 +18,7 @@ use crate::stage::CursorGround;
 const FIELD_HALF_SIZE: f32 = 9.5;
 const ATTACK_COLOR: Color = Color::srgb(0.86, 0.68, 0.28);
 const AREA_COLOR: Color = Color::srgba(0.9, 0.8, 0.35, 0.2);
+const INVALID_AREA_COLOR: Color = Color::srgba(0.95, 0.2, 0.2, 0.35);
 
 /// Knight Bunny stats and action-area size for a level.
 #[derive(Resource, Debug, Clone, Deserialize)]
@@ -33,6 +34,16 @@ pub struct KnightBunnyConfig {
     pub speed: f32,
     #[serde(with = "humantime_serde")]
     pub attack_interval: Duration,
+}
+
+impl KnightBunnyConfig {
+    fn can_place_at(&self, position: Vec2, posts: impl IntoIterator<Item = Vec2>) -> bool {
+        position.is_finite()
+            && position.abs().max_element() <= FIELD_HALF_SIZE
+            && posts
+                .into_iter()
+                .all(|post| post.distance(position) >= self.action_radius * 2.0)
+    }
 }
 
 /// Starts placing one Knight Bunny.
@@ -75,12 +86,16 @@ impl KnightBunny {
     }
 }
 
+#[derive(Component, Debug)]
+struct PlacementPreview;
+
 #[derive(Resource, Debug)]
 struct DefenderAssets {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
     area_mesh: Handle<Mesh>,
     area_material: Handle<StandardMaterial>,
+    invalid_area_material: Handle<StandardMaterial>,
 }
 
 impl FromWorld for DefenderAssets {
@@ -95,12 +110,18 @@ impl FromWorld for DefenderAssets {
             alpha_mode: AlphaMode::Blend,
             ..default()
         });
+        let invalid_area_material = materials.add(StandardMaterial {
+            base_color: INVALID_AREA_COLOR,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
 
         Self {
             mesh,
             material,
             area_mesh,
             area_material,
+            invalid_area_material,
         }
     }
 }
@@ -117,6 +138,14 @@ impl Plugin for DefendersPlugin {
             .add_systems(
                 Update,
                 (request_placement, place_on_click).in_set(GameSet::Input),
+            )
+            .add_systems(
+                OnEnter(AppState::InLevel),
+                (reset_placement, spawn_placement_preview),
+            )
+            .add_systems(
+                Update,
+                update_placement_preview.in_set(GameSet::Presentation),
             )
             .add_systems(FixedUpdate, attack_nearest_ant.in_set(GameSet::Act));
     }
@@ -137,6 +166,54 @@ fn request_placement(
     } else {
         commands.trigger(BeginKnightBunnyPlacement);
     }
+}
+
+fn reset_placement(mut mode: ResMut<PlacementMode>) {
+    mode.active = false;
+}
+
+fn spawn_placement_preview(mut commands: Commands, assets: Res<DefenderAssets>) {
+    commands.spawn((
+        Name::new("Knight Bunny placement preview"),
+        PlacementPreview,
+        Mesh3d(assets.area_mesh.clone()),
+        MeshMaterial3d(assets.area_material.clone()),
+        Visibility::Hidden,
+        DespawnOnExit(AppState::InLevel),
+    ));
+}
+
+fn update_placement_preview(
+    mode: Res<PlacementMode>,
+    cursor: Res<CursorGround>,
+    config: Res<KnightBunnyConfig>,
+    defenders: Query<&KnightBunny>,
+    mut preview: Single<
+        (
+            &mut Transform,
+            &mut Visibility,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        With<PlacementPreview>,
+    >,
+    assets: Res<DefenderAssets>,
+) {
+    let Some(position) = cursor.0.filter(|_| mode.active) else {
+        *preview.1 = Visibility::Hidden;
+
+        return;
+    };
+
+    let valid = config.can_place_at(position, defenders.iter().map(|defender| defender.post));
+    preview.0.translation = position.on_ground() + Vec3::Y * 0.02;
+    preview.0.scale = Vec3::splat(config.action_radius);
+    preview.0.rotation = Quat::IDENTITY;
+    *preview.1 = Visibility::Visible;
+    preview.2.0 = if valid {
+        assets.area_material.clone()
+    } else {
+        assets.invalid_area_material.clone()
+    };
 }
 
 fn begin_placement(
@@ -178,7 +255,7 @@ fn place_knight_bunny(
     config: Res<KnightBunnyConfig>,
     assets: Res<DefenderAssets>,
     mut mode: ResMut<PlacementMode>,
-    defenders: Query<&Transform, With<KnightBunny>>,
+    defenders: Query<&KnightBunny>,
 ) {
     if !mode.active {
         return;
@@ -186,17 +263,8 @@ fn place_knight_bunny(
 
     let position = event.position;
 
-    if position.abs().max_element() > FIELD_HALF_SIZE {
-        info!("Choose a position on the map");
-
-        return;
-    }
-
-    if defenders
-        .iter()
-        .any(|defender| defender.translation.xz().distance(position) < config.action_radius * 2.0)
-    {
-        info!("Knight Bunny action areas cannot overlap");
+    if !config.can_place_at(position, defenders.iter().map(|defender| defender.post)) {
+        info!("Choose a valid Knight Bunny position");
 
         return;
     }
@@ -223,8 +291,7 @@ fn place_knight_bunny(
         Mesh3d(assets.area_mesh.clone()),
         MeshMaterial3d(assets.area_material.clone()),
         Transform::from_translation(position.on_ground() + Vec3::Y * 0.02)
-            .with_scale(Vec3::splat(config.action_radius))
-            .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+            .with_scale(Vec3::splat(config.action_radius)),
         DespawnOnExit(AppState::InLevel),
     ));
 
@@ -353,6 +420,98 @@ mod tests {
     }
 
     #[test]
+    fn placement_uses_guard_post_instead_of_moving_transform() {
+        let mut app = defenders_app(10);
+        app.world_mut()
+            .resource_mut::<KnightBunnyConfig>()
+            .action_radius = 3.0;
+        let guard = app
+            .world_mut()
+            .spawn((
+                KnightBunny::new(Vec2::ZERO, Duration::from_secs(1)),
+                Transform::from_xyz(2.0, 0.0, 0.0),
+            ))
+            .id();
+        app.world_mut().resource_mut::<PlacementMode>().active = true;
+
+        app.world_mut().trigger(PlaceKnightBunny {
+            position: Vec2::new(-5.0, 0.0),
+        });
+        app.update();
+
+        assert_eq!(knight_count(&mut app), 1);
+        assert_eq!(app.world().resource::<Gold>().amount(), 10);
+        assert!(app.world().resource::<PlacementMode>().is_active());
+
+        app.world_mut()
+            .get_mut::<Transform>(guard)
+            .unwrap()
+            .translation
+            .x = 1.0;
+        app.world_mut().trigger(PlaceKnightBunny {
+            position: Vec2::new(6.5, 0.0),
+        });
+        app.update();
+
+        assert_eq!(knight_count(&mut app), 2);
+        assert_eq!(app.world().resource::<Gold>().amount(), 5);
+    }
+
+    #[test]
+    fn placement_preview_tracks_cursor_and_marks_overlapping_posts_invalid() {
+        let mut app = defenders_app(10);
+        app.world_mut().resource_mut::<PlacementMode>().active = true;
+        app.world_mut().resource_mut::<CursorGround>().0 = Some(Vec2::new(1.0, 0.0));
+        app.update();
+
+        let mut preview_query = app.world_mut().query::<(
+            &Name,
+            &Visibility,
+            &Transform,
+            &MeshMaterial3d<StandardMaterial>,
+        )>();
+        let (visibility, transform, material) = preview_query
+            .iter(app.world())
+            .find(|(name, ..)| name.as_str() == "Knight Bunny placement preview")
+            .map(|(_, visibility, transform, material)| {
+                (*visibility, *transform, material.0.clone())
+            })
+            .expect("placement preview should exist");
+
+        assert_eq!(visibility, Visibility::Visible);
+        assert_eq!(transform.translation.xz(), Vec2::new(1.0, 0.0));
+        assert_eq!(transform.rotation, Quat::IDENTITY);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&material)
+                .unwrap()
+                .base_color,
+            AREA_COLOR
+        );
+
+        app.world_mut().spawn((
+            KnightBunny::new(Vec2::ZERO, Duration::from_secs(1)),
+            Transform::default(),
+        ));
+        app.update();
+
+        let material = preview_query
+            .iter(app.world())
+            .find(|(name, ..)| name.as_str() == "Knight Bunny placement preview")
+            .map(|(_, _, _, material)| material.0.clone())
+            .expect("placement preview should exist");
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&material)
+                .unwrap()
+                .base_color,
+            Color::srgba(0.95, 0.2, 0.2, 0.35)
+        );
+    }
+
+    #[test]
     fn plants_can_be_inside_a_defenders_action_area() {
         let mut app = defenders_app(5);
 
@@ -372,6 +531,17 @@ mod tests {
 
         assert_eq!(knight_count(&mut app), 0);
         assert_eq!(app.world().resource::<Gold>().amount(), 4);
+    }
+
+    #[test]
+    fn placement_mode_resets_when_replaying_level() {
+        let mut app = defenders_app(10);
+        app.world_mut().trigger(BeginKnightBunnyPlacement);
+        assert!(app.world().resource::<PlacementMode>().is_active());
+
+        app.enter(AppState::Results).enter(AppState::InLevel);
+
+        assert!(!app.world().resource::<PlacementMode>().is_active());
     }
 
     #[test]

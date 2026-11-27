@@ -27,7 +27,7 @@ const PEDDLER_COLOR: Color = Color::srgb(0.55, 0.35, 0.7);
 
 /// Everything a level is made of, as authored in `assets/data/levels/*.level.ron`.
 #[derive(Asset, TypePath, Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "UnvalidatedLevelDefinition")]
 pub struct LevelDefinition {
     pub difficulties: DifficultySettings,
     pub timeline: Timeline,
@@ -36,6 +36,47 @@ pub struct LevelDefinition {
     pub economy: EconomyConfig,
     pub enemies: EnemiesConfig,
     pub knight_bunny: KnightBunnyConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnvalidatedLevelDefinition {
+    difficulties: DifficultySettings,
+    timeline: Timeline,
+    map: MapLayout,
+    farming: FarmingConfig,
+    economy: EconomyConfig,
+    enemies: EnemiesConfig,
+    knight_bunny: KnightBunnyConfig,
+}
+
+impl TryFrom<UnvalidatedLevelDefinition> for LevelDefinition {
+    type Error = String;
+
+    fn try_from(level: UnvalidatedLevelDefinition) -> Result<Self, Self::Error> {
+        let growth_multiplier = level.farming.growth_boost.growth_multiplier;
+
+        if !growth_multiplier.is_finite() || growth_multiplier <= 0.0 {
+            return Err(
+                "farming.growth_boost.growth_multiplier must be finite and greater than zero"
+                    .to_owned(),
+            );
+        }
+
+        if !level.map.crystal_health.is_finite() || level.map.crystal_health <= 0.0 {
+            return Err("map.crystal_health must be finite and greater than zero".to_owned());
+        }
+
+        Ok(Self {
+            difficulties: level.difficulties,
+            timeline: level.timeline,
+            map: level.map,
+            farming: level.farming,
+            economy: level.economy,
+            enemies: level.enemies,
+            knight_bunny: level.knight_bunny,
+        })
+    }
 }
 
 /// Where things are on the map. Positions are on the ground plane, in world units.
@@ -272,8 +313,33 @@ mod tests {
     }
 
     #[test]
+    fn hard_difficulty_can_afford_a_knight_bunny_at_level_start() {
+        let level = parse(PROTOTYPE_LEVEL).unwrap();
+        let hard = level.difficulties.starting_resources(Difficulty::Hard);
+
+        assert!(hard.seeds >= 1);
+        assert!(hard.gold >= level.economy.knight_bunny_cost);
+    }
+
+    #[test]
     fn malformed_level_is_a_parse_error() {
         assert!(parse("(difficulties: (easy: (seeds: 1").is_err());
+    }
+
+    #[test]
+    fn nonpositive_growth_multiplier_is_a_field_specific_error() {
+        let invalid = PROTOTYPE_LEVEL.replace("growth_multiplier: 3.0", "growth_multiplier: -1.0");
+        let error = parse(&invalid).unwrap_err().to_string();
+
+        assert!(error.contains("farming.growth_boost.growth_multiplier"));
+    }
+
+    #[test]
+    fn nonpositive_crystal_health_is_a_field_specific_error() {
+        let invalid = PROTOTYPE_LEVEL.replace("crystal_health: 100.0", "crystal_health: 0.0");
+        let error = parse(&invalid).unwrap_err().to_string();
+
+        assert!(error.contains("map.crystal_health"));
     }
 
     #[test]
