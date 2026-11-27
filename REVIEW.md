@@ -6,7 +6,7 @@ A fresh code reviewer reads this file before reviewing a change (see the [delive
 
 Check correctness, edge cases, tests, maintainability and compliance with the approved design and `AGENTS.md`. For game code, also check:
 
-- **Plugin boundaries:** each plugin owns its data; no system queries another plugin's private components ([Plugins and boundaries](AGENTS.md#plugins-and-boundaries)).
+- **Plugin boundaries:** each plugin owns its data and no system queries another plugin's private components. Plugins are independent and reusable: they expose a public surface to communicate with and take configuration through their constructor instead of hard-coding the game types they serve ([Plugins and boundaries](AGENTS.md#plugins-and-boundaries)).
 - **Scheduling:** systems that read what another writes in the same frame are ordered through sets; gameplay systems are gated by state; simulation runs in `FixedUpdate` ([Game flow and scheduling](AGENTS.md#game-flow-and-scheduling)).
 - **Query conflicts:** two queries in one system that can borrow the same component mutably must be disjoint (`Without<..>` or a `ParamSet`), or Bevy panics at startup.
 - **Frame independence:** movement, growth and cooldowns use `Time` or a `Timer`, never a per-frame constant.
@@ -16,6 +16,7 @@ Check correctness, edge cases, tests, maintainability and compliance with the ap
 - **Shaders:** uniform layout matches between Rust and WGSL.
 - **Hot paths:** no per-frame allocations or broad queries in systems that run every frame on many entities.
 - **Explanation:** the PR explains the plugin's role, its connections and the alternatives, with references ([How We Work Together](AGENTS.md#how-we-work-together)).
+- **README:** still accurate after the change and still short; details belong in linked docs, not in the README ([Documentation and Development Workflow](AGENTS.md#documentation-and-development-workflow)).
 
 ## Check strictly
 

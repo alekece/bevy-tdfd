@@ -1,12 +1,8 @@
 # Top Dungeon Farmer Defense
 
-A cozy, colorful low-poly 3D tower defense with farming, built with [Bevy](https://bevy.org) 0.20. Plant crops along the ants' paths, let your rabbit farmers harvest them, sell to Théo the peddler cat, and place animal defenders to protect the warp crystal.
+![Status: under development](https://img.shields.io/badge/status-under%20development-orange)
 
-This is a learning project: each gameplay system is built as its own Bevy plugin, with an explanation of why it is shaped that way.
-
-## Status
-
-Scaffold only: the app opens a window with a placeholder camera, light and ground. Gameplay arrives plugin by plugin, through the stages prototype → vertical slice → alpha → beta.
+A cozy, colorful low-poly 3D tower defense with farming, built with [Bevy](https://bevy.org). Plant crops along the ants' paths, let your rabbit farmers harvest them, sell crops to the peddler, and place animal defenders to protect the warp crystal.
 
 ## Run
 
