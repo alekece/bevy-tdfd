@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_common_assets::ron::RonAssetPlugin;
 use serde::Deserialize;
@@ -24,7 +25,6 @@ use crate::game::{AppState, DifficultySettings, GroundPosition, Timeline};
 use crate::movement::PathWaypoints;
 use crate::targeting::Tags;
 use crate::waves::WaveScript;
-
 const LEVEL_PATH: &str = "data/levels/prototype.level.ron";
 const CRYSTAL_TAG: &str = "crystal";
 const PATH_WIDTH: f32 = 0.8;
@@ -42,6 +42,8 @@ pub enum LevelError {
     NotFinite { field: String },
     #[error("{field} must be greater than zero")]
     NotPositive { field: String },
+    #[error("{field} must not be negative")]
+    Negative { field: String },
     #[error("{field} names {id:?}, which is not in {section}")]
     UnknownRecipe {
         field: String,
@@ -50,6 +52,25 @@ pub enum LevelError {
     },
     #[error("trade.sells must offer at least one defender")]
     NothingForSale,
+}
+
+impl LevelError {
+    fn require_recipe<T>(
+        recipes: &BTreeMap<String, T>,
+        field: String,
+        id: &str,
+        section: &'static str,
+    ) -> Result<(), Self> {
+        if recipes.contains_key(id) {
+            return Ok(());
+        }
+
+        Err(Self::UnknownRecipe {
+            field,
+            id: id.to_owned(),
+            section,
+        })
+    }
 }
 
 /// Everything a level is made of, as authored in `assets/data/levels/*.level.ron`.
@@ -143,25 +164,6 @@ impl LevelDefinition {
     }
 }
 
-impl LevelError {
-    fn require_recipe<T>(
-        recipes: &BTreeMap<String, T>,
-        field: String,
-        id: &str,
-        section: &'static str,
-    ) -> Result<(), Self> {
-        if recipes.contains_key(id) {
-            return Ok(());
-        }
-
-        Err(Self::UnknownRecipe {
-            field,
-            id: id.to_owned(),
-            section,
-        })
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnvalidatedLevelDefinition {
@@ -197,199 +199,6 @@ impl TryFrom<UnvalidatedLevelDefinition> for LevelDefinition {
         level.validate()?;
 
         Ok(level)
-    }
-}
-
-/// A level value that load-time validation checks.
-trait LevelValue {
-    /// Fails unless the value is finite.
-    fn finite(&self, field: &str) -> Result<(), LevelError>;
-
-    /// Fails unless the value is finite and greater than zero.
-    fn positive(&self, field: &str) -> Result<(), LevelError>;
-}
-
-impl LevelValue for f32 {
-    fn finite(&self, field: &str) -> Result<(), LevelError> {
-        if self.is_finite() {
-            return Ok(());
-        }
-
-        Err(LevelError::NotFinite {
-            field: field.to_owned(),
-        })
-    }
-
-    fn positive(&self, field: &str) -> Result<(), LevelError> {
-        self.finite(field)?;
-
-        if *self > 0.0 {
-            return Ok(());
-        }
-
-        Err(LevelError::NotPositive {
-            field: field.to_owned(),
-        })
-    }
-}
-
-impl LevelValue for Duration {
-    fn finite(&self, _field: &str) -> Result<(), LevelError> {
-        Ok(())
-    }
-
-    fn positive(&self, field: &str) -> Result<(), LevelError> {
-        if !self.is_zero() {
-            return Ok(());
-        }
-
-        Err(LevelError::NotPositive {
-            field: field.to_owned(),
-        })
-    }
-}
-
-impl LevelValue for Vec2 {
-    fn finite(&self, field: &str) -> Result<(), LevelError> {
-        self.x.finite(field)?;
-        self.y.finite(field)
-    }
-
-    fn positive(&self, field: &str) -> Result<(), LevelError> {
-        self.x.positive(field)?;
-        self.y.positive(field)
-    }
-}
-
-impl LevelValue for Rgb {
-    fn finite(&self, field: &str) -> Result<(), LevelError> {
-        self.0.finite(field)?;
-        self.1.finite(field)?;
-        self.2.finite(field)
-    }
-
-    fn positive(&self, field: &str) -> Result<(), LevelError> {
-        self.0.positive(field)?;
-        self.1.positive(field)?;
-        self.2.positive(field)
-    }
-}
-
-/// A section of the level that validates its own fields, named under `field`.
-trait Validate {
-    fn validate(&self, field: &str) -> Result<(), LevelError>;
-}
-
-impl Validate for MapLayout {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        self.crystal_health
-            .positive(&format!("{field}.crystal_health"))?;
-
-        for (index, waypoint) in self.path.waypoints().iter().enumerate() {
-            waypoint.finite(&format!("{field}.path[{index}]"))?;
-        }
-
-        for (index, plot) in self.plots.iter().enumerate() {
-            plot.finite(&format!("{field}.plots[{index}]"))?;
-        }
-
-        self.peddler.finite(&format!("{field}.peddler"))?;
-        self.farmer_start.finite(&format!("{field}.farmer_start"))?;
-        self.rabbit_home.finite(&format!("{field}.rabbit_home"))
-    }
-}
-
-impl Validate for FarmingConfig {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        self.action_time.positive(&format!("{field}.action_time"))?;
-        self.farmer_speed
-            .positive(&format!("{field}.farmer_speed"))?;
-
-        let rabbits = &self.rabbits;
-        rabbits.speed.positive(&format!("{field}.rabbits.speed"))?;
-        rabbits
-            .harvest_time
-            .positive(&format!("{field}.rabbits.harvest_time"))?;
-        rabbits
-            .flee_radius
-            .positive(&format!("{field}.rabbits.flee_radius"))?;
-
-        self.mana.max.positive(&format!("{field}.mana.max"))?;
-        self.mana
-            .regeneration
-            .finite(&format!("{field}.mana.regeneration"))?;
-
-        let boost = &self.growth_boost;
-        boost
-            .mana_cost
-            .finite(&format!("{field}.growth_boost.mana_cost"))?;
-        boost
-            .radius
-            .positive(&format!("{field}.growth_boost.radius"))?;
-        boost
-            .growth_multiplier
-            .positive(&format!("{field}.growth_boost.growth_multiplier"))?;
-        boost
-            .duration
-            .positive(&format!("{field}.growth_boost.duration"))
-    }
-}
-
-impl Validate for Shape {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        match *self {
-            Shape::Sphere { radius } => radius.positive(&format!("{field}.radius")),
-            Shape::Capsule { radius, length } => {
-                radius.positive(&format!("{field}.radius"))?;
-                length.positive(&format!("{field}.length"))
-            }
-        }
-    }
-}
-
-impl Validate for MeleeRecipe {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        self.damage.finite(&format!("{field}.damage"))?;
-        self.range.positive(&format!("{field}.range"))?;
-        self.interval.positive(&format!("{field}.interval"))
-    }
-}
-
-impl Validate for AgentRecipe {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        self.health.positive(&format!("{field}.health"))?;
-        self.speed.positive(&format!("{field}.speed"))?;
-        self.sight.positive(&format!("{field}.sight"))?;
-
-        if let Some(melee) = &self.melee {
-            melee.validate(&format!("{field}.melee"))?;
-        }
-
-        self.visual
-            .shape
-            .validate(&format!("{field}.visual.shape"))?;
-        self.visual.color.finite(&format!("{field}.visual.color"))
-    }
-}
-
-impl Validate for CropRecipe {
-    fn validate(&self, field: &str) -> Result<(), LevelError> {
-        self.health.positive(&format!("{field}.health"))?;
-        self.growth_time.positive(&format!("{field}.growth_time"))?;
-
-        if let Some(eat) = &self.eat {
-            eat.regeneration_multiplier
-                .positive(&format!("{field}.eat.regeneration_multiplier"))?;
-            eat.duration.positive(&format!("{field}.eat.duration"))?;
-        }
-
-        self.visual
-            .shape
-            .validate(&format!("{field}.visual.shape"))?;
-        self.visual.color.finite(&format!("{field}.visual.color"))?;
-        self.visual
-            .ripe_color
-            .finite(&format!("{field}.visual.ripe_color"))
     }
 }
 
@@ -480,6 +289,249 @@ pub struct Peddler;
 /// The level definition being played.
 #[derive(Resource, Debug)]
 struct CurrentLevel(Handle<LevelDefinition>);
+
+/// The sections of the running level that name recipes.
+#[derive(SystemParam)]
+struct RunningLevel<'w> {
+    waves: Option<Res<'w, WaveScript>>,
+    farming: Option<Res<'w, FarmingConfig>>,
+    trade: Option<Res<'w, Trade>>,
+}
+
+impl RunningLevel<'_> {
+    /// The first recipe the running level uses that `recipes` lacks.
+    fn missing_recipe(&self, recipes: &Recipes) -> Option<String> {
+        let (Some(waves), Some(farming), Some(trade)) = (&self.waves, &self.farming, &self.trade)
+        else {
+            return None;
+        };
+
+        LevelDefinition::missing_recipe(recipes, waves, farming, trade)
+    }
+}
+
+/// A level value that load-time validation checks.
+trait LevelValue {
+    /// Fails unless the value is finite.
+    fn finite(&self, field: &str) -> Result<(), LevelError>;
+
+    /// Fails unless the value is finite and greater than zero.
+    fn positive(&self, field: &str) -> Result<(), LevelError>;
+
+    /// Fails unless the value is finite and zero or more.
+    fn non_negative(&self, field: &str) -> Result<(), LevelError>;
+}
+
+/// A section of the level that validates its own fields, named under `field`.
+trait Validate {
+    fn validate(&self, field: &str) -> Result<(), LevelError>;
+}
+
+impl LevelValue for f32 {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        if self.is_finite() {
+            return Ok(());
+        }
+
+        Err(LevelError::NotFinite {
+            field: field.to_owned(),
+        })
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.finite(field)?;
+
+        if *self > 0.0 {
+            return Ok(());
+        }
+
+        Err(LevelError::NotPositive {
+            field: field.to_owned(),
+        })
+    }
+
+    fn non_negative(&self, field: &str) -> Result<(), LevelError> {
+        self.finite(field)?;
+
+        if *self >= 0.0 {
+            return Ok(());
+        }
+
+        Err(LevelError::Negative {
+            field: field.to_owned(),
+        })
+    }
+}
+
+impl LevelValue for Duration {
+    fn finite(&self, _field: &str) -> Result<(), LevelError> {
+        Ok(())
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        if !self.is_zero() {
+            return Ok(());
+        }
+
+        Err(LevelError::NotPositive {
+            field: field.to_owned(),
+        })
+    }
+
+    fn non_negative(&self, _field: &str) -> Result<(), LevelError> {
+        Ok(())
+    }
+}
+
+impl LevelValue for Vec2 {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        self.x.finite(field)?;
+        self.y.finite(field)
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.x.positive(field)?;
+        self.y.positive(field)
+    }
+
+    fn non_negative(&self, field: &str) -> Result<(), LevelError> {
+        self.x.non_negative(field)?;
+        self.y.non_negative(field)
+    }
+}
+
+impl LevelValue for Rgb {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        self.0.finite(field)?;
+        self.1.finite(field)?;
+        self.2.finite(field)
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.0.positive(field)?;
+        self.1.positive(field)?;
+        self.2.positive(field)
+    }
+
+    fn non_negative(&self, field: &str) -> Result<(), LevelError> {
+        self.0.non_negative(field)?;
+        self.1.non_negative(field)?;
+        self.2.non_negative(field)
+    }
+}
+
+impl Validate for MapLayout {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.crystal_health
+            .positive(&format!("{field}.crystal_health"))?;
+
+        for (index, waypoint) in self.path.waypoints().iter().enumerate() {
+            waypoint.finite(&format!("{field}.path[{index}]"))?;
+        }
+
+        for (index, plot) in self.plots.iter().enumerate() {
+            plot.finite(&format!("{field}.plots[{index}]"))?;
+        }
+
+        self.peddler.finite(&format!("{field}.peddler"))?;
+        self.farmer_start.finite(&format!("{field}.farmer_start"))?;
+        self.rabbit_home.finite(&format!("{field}.rabbit_home"))
+    }
+}
+
+impl Validate for FarmingConfig {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.action_time.positive(&format!("{field}.action_time"))?;
+        self.farmer_speed
+            .positive(&format!("{field}.farmer_speed"))?;
+
+        let rabbits = &self.rabbits;
+        rabbits.speed.positive(&format!("{field}.rabbits.speed"))?;
+        rabbits
+            .harvest_time
+            .positive(&format!("{field}.rabbits.harvest_time"))?;
+        rabbits
+            .flee_radius
+            .positive(&format!("{field}.rabbits.flee_radius"))?;
+
+        self.mana.max.positive(&format!("{field}.mana.max"))?;
+        self.mana
+            .regeneration
+            .non_negative(&format!("{field}.mana.regeneration"))?;
+
+        let boost = &self.growth_boost;
+        boost
+            .mana_cost
+            .non_negative(&format!("{field}.growth_boost.mana_cost"))?;
+        boost
+            .radius
+            .positive(&format!("{field}.growth_boost.radius"))?;
+        boost
+            .growth_multiplier
+            .positive(&format!("{field}.growth_boost.growth_multiplier"))?;
+        boost
+            .duration
+            .positive(&format!("{field}.growth_boost.duration"))
+    }
+}
+
+impl Validate for Shape {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        match *self {
+            Shape::Sphere { radius } => radius.positive(&format!("{field}.radius")),
+            Shape::Capsule { radius, length } => {
+                radius.positive(&format!("{field}.radius"))?;
+                length.positive(&format!("{field}.length"))
+            }
+        }
+    }
+}
+
+impl Validate for MeleeRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.damage.finite(&format!("{field}.damage"))?;
+        self.range.positive(&format!("{field}.range"))?;
+        self.interval.positive(&format!("{field}.interval"))
+    }
+}
+
+impl Validate for AgentRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.health.positive(&format!("{field}.health"))?;
+        self.speed.positive(&format!("{field}.speed"))?;
+        self.sight.positive(&format!("{field}.sight"))?;
+
+        if let Some(melee) = &self.melee {
+            melee.validate(&format!("{field}.melee"))?;
+        }
+
+        self.visual
+            .shape
+            .validate(&format!("{field}.visual.shape"))?;
+        self.visual.color.finite(&format!("{field}.visual.color"))
+    }
+}
+
+impl Validate for CropRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.health.positive(&format!("{field}.health"))?;
+        self.growth_time.positive(&format!("{field}.growth_time"))?;
+
+        if let Some(eat) = &self.eat {
+            eat.regeneration_multiplier
+                .positive(&format!("{field}.eat.regeneration_multiplier"))?;
+            eat.duration.positive(&format!("{field}.eat.duration"))?;
+        }
+
+        self.visual
+            .shape
+            .validate(&format!("{field}.visual.shape"))?;
+        self.visual.color.finite(&format!("{field}.visual.color"))?;
+        self.visual
+            .ripe_color
+            .finite(&format!("{field}.visual.ripe_color"))
+    }
+}
 
 /// Loads the level definition and spawns the map.
 pub struct MapPlugin;
@@ -574,26 +626,6 @@ fn apply_reloaded_level(
     }
 
     info!("Level definition applied");
-}
-
-/// The sections of the running level that name recipes.
-#[derive(bevy::ecs::system::SystemParam)]
-struct RunningLevel<'w> {
-    waves: Option<Res<'w, WaveScript>>,
-    farming: Option<Res<'w, FarmingConfig>>,
-    trade: Option<Res<'w, Trade>>,
-}
-
-impl RunningLevel<'_> {
-    /// The first recipe the running level uses that `recipes` lacks.
-    fn missing_recipe(&self, recipes: &Recipes) -> Option<String> {
-        let (Some(waves), Some(farming), Some(trade)) = (&self.waves, &self.farming, &self.trade)
-        else {
-            return None;
-        };
-
-        LevelDefinition::missing_recipe(recipes, waves, farming, trade)
-    }
 }
 
 fn spawn_map(
@@ -801,6 +833,21 @@ mod tests {
                 error(&invalid).contains("farming.growth_boost.growth_multiplier"),
                 "{value} should be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn negative_mana_values_are_rejected_and_zero_is_allowed() {
+        for (authored, field) in [
+            ("regeneration: 0.25", "farming.mana.regeneration"),
+            ("mana_cost: 4.0", "farming.growth_boost.mana_cost"),
+        ] {
+            let name = authored.split(':').next().unwrap();
+            let negative = PROTOTYPE_LEVEL.replacen(authored, &format!("{name}: -1.0"), 1);
+            let zero = PROTOTYPE_LEVEL.replacen(authored, &format!("{name}: 0.0"), 1);
+
+            assert!(error(&negative).contains(&format!("{field} must not be negative")));
+            assert!(parse(&zero).is_ok(), "{field} may be zero");
         }
     }
 
