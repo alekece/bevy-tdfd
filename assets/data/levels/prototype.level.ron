@@ -1,0 +1,21 @@
+// Prototype level: one path, three tomato plots, green ants.
+// Values are playtest defaults, not final balance. Edit while the game runs to hot reload them.
+// Positions are (x, z) on the ground plane in world units; durations use "30s" or "1m 30s".
+(
+    difficulties: (
+        easy: (seeds: 5, gold: 30),
+        normal: (seeds: 3, gold: 15),
+        hard: (seeds: 1, gold: 0),
+    ),
+    timeline: (
+        length: "4m",
+        sell_window: "30s",
+    ),
+    map: (
+        path: [(-9.0, -7.0), (-3.0, -7.0), (-3.0, 0.0), (4.0, 0.0), (4.0, 6.0), (8.0, 6.0)],
+        plots: [(-5.5, -3.5), (0.5, -2.5), (1.5, 2.5)],
+        peddler: (7.5, -6.0),
+        farmer_start: (-1.0, -4.5),
+        rabbit_home: (-7.0, 3.0),
+    ),
+)

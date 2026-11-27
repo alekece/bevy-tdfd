@@ -1,7 +1,11 @@
+mod game;
+mod map;
 mod stage;
 
 use bevy::prelude::*;
 
+use crate::game::GamePlugin;
+use crate::map::MapPlugin;
 use crate::stage::StagePlugin;
 
 fn main() -> AppExit {
@@ -14,7 +18,9 @@ fn main() -> AppExit {
                 }),
                 ..default()
             }),
+            GamePlugin,
             StagePlugin,
+            MapPlugin,
         ))
         .run()
 }
