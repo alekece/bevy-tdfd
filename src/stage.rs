@@ -1,18 +1,52 @@
-//! Placeholder stage: a camera looking down at an angle, a light and a ground plane.
+//! The stage: a camera looking down at an angle, a light and a ground plane.
 //!
-//! It proves the window, renderer and plugin wiring work. Gameplay plugins replace it.
+//! Also tracks where the mouse cursor points on the ground, so input systems of other plugins can
+//! read [`CursorGround`] instead of querying the camera themselves. [`Field`] tells where agents may
+//! walk and be placed.
 
+use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 
+use crate::game::GameSet;
+
 const GROUND_SIZE: f32 = 20.0;
+/// World units the camera always keeps visible horizontally and vertically; the ground looks shorter
+/// vertically because the camera looks down at an angle.
+const VIEW_WIDTH: f32 = 21.0;
+const VIEW_HEIGHT: f32 = 16.5;
 const GROUND_COLOR: Color = Color::srgb(0.45, 0.7, 0.35);
 
-/// Spawns the placeholder stage when the app starts.
+/// The square of ground agents may walk on and be placed on, centered on the origin.
+#[derive(Debug, Clone, Copy)]
+pub struct Field;
+
+impl Field {
+    /// Half the side of the field, in world units.
+    pub const HALF_SIZE: f32 = 9.5;
+
+    /// Whether `point` is on the field.
+    pub fn contains(point: Vec2) -> bool {
+        point.is_finite() && point.abs().max_element() <= Self::HALF_SIZE
+    }
+
+    /// The point of the field nearest to `point`.
+    pub fn clamp(point: Vec2) -> Vec2 {
+        point.clamp(Vec2::splat(-Self::HALF_SIZE), Vec2::splat(Self::HALF_SIZE))
+    }
+}
+
+/// The point on the ground under the mouse cursor, if any.
+#[derive(Resource, Debug, Default)]
+pub struct CursorGround(pub Option<Vec2>);
+
+/// Spawns the stage when the app starts and tracks the cursor on the ground.
 pub struct StagePlugin;
 
 impl Plugin for StagePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_stage);
+        app.init_resource::<CursorGround>()
+            .add_systems(Startup, spawn_stage)
+            .add_systems(Update, track_cursor.before(GameSet::Input));
     }
 }
 
@@ -25,6 +59,15 @@ fn spawn_stage(
     commands.spawn((
         Name::new("Camera"),
         Camera3d::default(),
+        // Orthographic keeps the whole field visible in any window shape, a common choice for tower
+        // defense where the player needs to see every lane at once.
+        Projection::from(OrthographicProjection {
+            scaling_mode: ScalingMode::AutoMin {
+                min_width: VIEW_WIDTH,
+                min_height: VIEW_HEIGHT,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
         Transform::from_xyz(0.0, 14.0, 12.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -42,4 +85,18 @@ fn spawn_stage(
         Mesh3d(meshes.add(Plane3d::default().mesh().size(GROUND_SIZE, GROUND_SIZE))),
         MeshMaterial3d(materials.add(GROUND_COLOR)),
     ));
+}
+
+fn track_cursor(
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    mut cursor_ground: ResMut<CursorGround>,
+) {
+    let (camera, camera_transform) = *camera;
+
+    cursor_ground.0 = window
+        .cursor_position()
+        .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
+        .and_then(|ray| ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)))
+        .map(|point| point.xz());
 }

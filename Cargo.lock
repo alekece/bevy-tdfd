@@ -252,6 +252,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.105"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -449,6 +455,11 @@ name = "bevy-tdfd"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_common_assets",
+ "humantime-serde",
+ "ron",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -694,6 +705,21 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "wgpu-types",
+]
+
+[[package]]
+name = "bevy_common_assets"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7704257ada15a12c1028a05c8cf8c3c10ad2ab2e9d06bb62763d5a2c5e0b7afb"
+dependencies = [
+ "anyhow",
+ "bevy_app",
+ "bevy_asset",
+ "bevy_reflect",
+ "ron",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3083,6 +3109,22 @@ dependencies = [
  "constgebra",
  "glam",
  "tinyvec",
+]
+
+[[package]]
+name = "humantime"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
+
+[[package]]
+name = "humantime-serde"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
+dependencies = [
+ "humantime",
+ "serde",
 ]
 
 [[package]]
