@@ -29,7 +29,7 @@ Top Dungeon Farmer Defense is a cozy low-poly 3D tower defense with farming, bui
 
 ## Documentation and Development Workflow
 
-- `README.md` owns the project overview, current status, setup and run instructions. Keep it aligned with the code.
+- `README.md` is for humans discovering the project: what the game is, its current status, how to install, run and check it, and where the deeper docs live. Keep it short and scannable, like the READMEs of Bevy or ripgrep. It is not a changelog, a design document or a list of every system. Details go in `docs/designs/`, `docs/adr/` or module docs, and the README links to them. Update it in the same change whenever setup, controls, status or features a player would notice change.
 - `docs/designs/` holds approved designs, committed. Update an evolving design in place after approved changes; Git keeps the history.
 - `docs/adr/` records significant architectural decisions (for example level authoring, physics, UI stack), their alternatives and consequences. Not one per dependency.
 - `docs/plans/` holds implementation plans in the worktree. Git ignores it; permanent documents never link to plans.
@@ -55,6 +55,8 @@ These rules take precedence over skill defaults, including those that allow impl
 
 - One plugin per gameplay responsibility (map, farming, enemies, defenders, economy, ...), in its own module. A plugin owns its components, resources, messages and systems, and registers them all in its `build`.
 - Plugins talk through a small set of shared components (`Health`, ...), messages, observers, states and system sets; never by querying another plugin's private components. A concept two plugins need moves to a shared module.
+- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor (fields, a builder, or a generic parameter such as `HealthPlugin::<Ant>::default()`) instead of hard-coding the game types it serves. Make configurable what actually varies between its real uses.
+- When a plugin needs another one, it depends only on that plugin's public surface and says so in its `//!` overview.
 - Keep `main.rs` to app setup: window, default plugins and the list of game plugins.
 - Gate debug-only plugins (inspector, gizmos, cheats) behind the `dev` feature.
 
