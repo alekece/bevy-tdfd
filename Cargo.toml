@@ -16,6 +16,10 @@ bevy = "0.20.1"
 too_many_arguments = "allow"
 type_complexity = "allow"
 
+# Unused crates only warn by default, and clippy's `-D warnings` does not cover Cargo lints.
+[lints.cargo]
+unused_dependencies = "deny"
+
 # Compile our code with light optimizations and dependencies fully optimized,
 # so debug builds stay playable without long compile times.
 [profile.dev]
