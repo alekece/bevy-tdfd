@@ -6,8 +6,9 @@ A fresh code reviewer reads this file before reviewing a change (see the [delive
 
 Check correctness, edge cases, tests, maintainability and compliance with the approved design and `AGENTS.md`. For game code, also check:
 
-- **Plugin boundaries:** each plugin owns its data and no system queries another plugin's private components. Plugins are independent and reusable: they expose a public surface to communicate with and take configuration through their constructor instead of hard-coding the game types they serve ([Plugins and boundaries](AGENTS.md#plugins-and-boundaries)).
-- **Scheduling:** systems that read what another writes in the same frame are ordered through sets; gameplay systems are gated by state; simulation runs in `FixedUpdate` ([Game flow and scheduling](AGENTS.md#game-flow-and-scheduling)).
+- **ECS composition:** content-specific names (`Ant`, `KnightBunny`, `tomato`) in a generic plugin's systems, queries, messages or configuration fields are **blocking**. A new defender, enemy or crop variant must be addable as a RON recipe without Rust ([ECS design](AGENTS.md#ecs-design)).
+- **Plugin boundaries:** each plugin owns its data and no system queries another plugin's private components. Plugins are independent and reusable: they expose a public surface to communicate with and take configuration through their constructor or data instead of hard-coding the content they serve ([Plugins and boundaries](AGENTS.md#plugins-and-boundaries)).
+- **Scheduling:** systems that read what another writes in the same tick are ordered through sets, including systems inside the same plugin; gameplay systems are gated by state; simulation runs in `FixedUpdate` ([Game flow and scheduling](AGENTS.md#game-flow-and-scheduling)).
 - **Query conflicts:** two queries in one system that can borrow the same component mutably must be disjoint (`Without<..>` or a `ParamSet`), or Bevy panics at startup.
 - **Frame independence:** movement, growth and cooldowns use `Time` or a `Timer`, never a per-frame constant.
 - **Entity lifetime:** entities spawned for a level are tagged for cleanup; code tolerates an entity despawned earlier in the frame.
@@ -25,7 +26,6 @@ These rules are already in `AGENTS.md`; the reviewer enforces them:
 - No free functions outside Bevy systems, observers, run conditions and tests ([Types and functions](AGENTS.md#types-and-functions)).
 - Variables named after the value they hold ([Naming](AGENTS.md#naming)).
 - Blank lines around control flow, `let` groups and return expressions ([Readability and errors](AGENTS.md#readability-and-errors)).
-- No newtype that encodes no invariant ([Types and functions](AGENTS.md#types-and-functions)).
 - Item order inside a file, with `impl` blocks under their type ([Code organization](AGENTS.md#code-organization)).
 
 ## Findings

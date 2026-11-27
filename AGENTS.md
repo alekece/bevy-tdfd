@@ -51,11 +51,24 @@ These rules take precedence over skill defaults, including those that allow impl
 
 ## Bevy Guidance
 
+### ECS design
+
+These rules shape every other Bevy rule below. When a Rust rule seems to conflict with them, they win.
+
+- An entity is the set of its components. Build defenders, enemies, crops and items from behaviour components (`Health`, `Speed`, `Melee`, `Guard`, `Targets`, `Growth`, `Sellable`, ...), not from one component that holds a creature's whole state and logic.
+- Plugins own behaviours (movement, targeting, melee, guarding, growth, trade), never a specific creature, crop or item. Content names (`Ant`, `KnightBunny`, `tomato`) do not appear in systems, queries, messages or configuration fields; they exist only as recipe names in `assets/data/`.
+- Content variants are typed RON recipes. A category marker (`Defender`, `Enemy`, `Crop`) brings the universal defaults with `#[require(..)]`; the recipe lists only what is unique: stats, targets, visual and optional capabilities such as `melee: Some(..)`. Adding a variant needs no Rust. A new behaviour is written in Rust first, then attached from RON.
+- Unique characters (the farmer, the helper rabbits, the peddler) may be defined in Rust, from the same behaviour components, with their numbers in RON.
+- Relations between entities are data, not types: who an entity attacks is a component (`Targets::Anyone`, `Targets::Only([..])`) that systems read, so the game can change it at runtime (the Blue Moon).
+- Each agent makes one decision per tick: a small state component picks its intent (follow the path, go to a crop, attack the crystal); generic movement and combat systems carry it out, ordered decide → move → act → resolve with system sets.
+- Spawning copies recipe values into components. Hot reload changes future spawns and restarted levels, never the state of live entities.
+- Content in an approved design under `docs/designs/` is not hypothetical: build the mechanism for it even when a step ships only one instance.
+
 ### Plugins and boundaries
 
-- One plugin per gameplay responsibility (map, farming, enemies, defenders, economy, ...), in its own module. A plugin owns its components, resources, messages and systems, and registers them all in its `build`.
+- One plugin per gameplay responsibility (map, movement, combat, farming, waves, economy, ...), in its own module. A plugin owns its components, resources, messages and systems, and registers them all in its `build`.
 - Plugins talk through a small set of shared components (`Health`, ...), messages, observers, states and system sets; never by querying another plugin's private components. A concept two plugins need moves to a shared module.
-- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor (fields, a builder, or a generic parameter such as `HealthPlugin::<Ant>::default()`) instead of hard-coding the game types it serves. Make configurable what actually varies between its real uses.
+- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor or its data instead of hard-coding the content it serves. Make configurable what actually varies between its real uses.
 - When a plugin needs another one, it depends only on that plugin's public surface and says so in its `//!` overview.
 - Keep `main.rs` to app setup: window, default plugins and the list of game plugins.
 - Gate debug-only plugins (inspector, gizmos, cheats) behind the `dev` feature.
@@ -77,7 +90,7 @@ These rules take precedence over skill defaults, including those that allow impl
 
 ### Entities and data
 
-- Prefer small components with one meaning over large ones. Use marker components (`Ant`, `Crop`) for queries, and `#[require(..)]` so spawning a marker brings its required components.
+- Prefer small components with one meaning over large ones. Use category markers (`Enemy`, `Crop`) for queries, and `#[require(..)]` so spawning a marker brings its required components.
 - Use `Single<..>` for an entity that must exist exactly once (the camera, the crystal); it skips the system when absent.
 - Keep tunable gameplay data (stats, costs, growth times, waves, levels) in RON assets under `assets/data/` that hot reload; Rust constants only for values that are not design decisions.
 - Load assets once and share their handles through a resource; never create a mesh or material per entity per frame.
@@ -104,18 +117,16 @@ These rules take precedence over skill defaults, including those that allow impl
 
 ### Types and functions
 
-- Add an abstraction (trait, wrapper, module boundary) only when it gives a concept a clear interface or enforces a contract callers would otherwise have to remember. No extension points for hypothetical future content.
+- Add a trait or wrapper only when it gives a concept a clear interface or enforces a contract callers would otherwise have to remember. Composing entities from behaviour components is not such an abstraction; it is the default (see [ECS design](#ecs-design)).
 - Keep generic mechanisms (damage, area checks, timers) separate from content-specific rules. Do not refactor unrelated code; mention a worthwhile improvement in the PR instead.
-- Encode invariants in types: newtypes, enums or typestate when they make an invalid state unrepresentable. Do not add a newtype that encodes no invariant.
-- Replace boolean or stringly-typed flags with enums. Use a builder when construction has many optional parts or needs validation.
+- Encode invariants in types: enums or newtypes when they make an invalid state unrepresentable. Single-field components (`Speed(f32)`) and markers are fine without an invariant: in ECS, the type is what systems query.
+- Replace boolean or stringly-typed flags with enums.
 - Prefer one generic type over several near-identical ones when only a type parameter differs. Use static dispatch unless runtime polymorphism is needed.
 - Time is a `Duration` or a `Timer`, never a bare number with a unit suffix (`delay_secs`). Distances and speeds are `f32` world units; document the unit on the field.
 - Avoid free functions: put behavior on the type that owns the data, a standard trait (`From`, `Default`, ...), an extension trait or a small new type. **Exception:** Bevy systems, observers and run conditions are functions by design; write them as functions registered by the plugin that owns them, and keep the rules they apply on types where they can be unit tested.
 - Group a system's many parameters with `#[derive(SystemParam)]` when it improves readability; the Clippy lints `too_many_arguments` and `type_complexity` are allowed for that reason, as in Bevy itself.
 - Make items private by default. Derive a trait only when something uses it; derive `Reflect` on components and resources that should show in the inspector or be set from Blender.
-- Put `#[must_use]` on builders and values that are a bug to drop.
 - Prefer a maintained, widely used crate (for example `derive_more`) over hand-written boilerplate; declare dependencies with the minimum features. Record significant choices (physics, UI, audio, level authoring) in an ADR.
-- Do not write `macro_rules!` unless you can state why (for example preventing drift between parallel definitions) and include a doc example.
 
 ### Ownership
 
@@ -139,7 +150,7 @@ These rules take precedence over skill defaults, including those that allow impl
 
 - Always put a blank line before and after control-flow blocks, after a group of `let` declarations, and before `return` unless it is the only statement in its scope. Keep logically related lines together.
 - Prefer guard clauses and `let .. else { continue }` over deep nesting. Use `Option`/`Result` and iterator combinators for value transformations, `for` loops for side effects.
-- Define typed errors with `thiserror` where something can fail (asset loaders, save data); `Display` describes only its own layer and exposes the cause through `source()`. Treat a violated invariant as a bug, not a recoverable error.
+- Asset loading and save data return typed errors (`thiserror`) that name the bad field; validate gameplay values (positive health, ordered waves, ...) when data loads, not where it is used. Treat a violated invariant in code as a bug, not a recoverable error.
 - Game code tolerates missing entities: an entity despawned this frame is normal, not an error. Use `expect` with a message naming the invariant only when absence is a bug. `unwrap` and `expect` are fine in tests.
 
 ### Comments and docs
