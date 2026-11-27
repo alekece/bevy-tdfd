@@ -5,11 +5,11 @@
 
 use bevy::prelude::*;
 
+use crate::economy::Gold;
 use crate::farming::{Farmer, Mana, Pantry, SeedStock};
 use crate::game::{AppState, GameSet};
 
-const CONTROLS: &str =
-    "Right click: walk, plant or harvest  |  G: Growth Boost  |  E: eat a tomato";
+const CONTROLS: &str = "Right click: walk, plant or harvest  |  G: Growth Boost  |  E: eat a tomato  |  S: sell tomatoes";
 
 /// The text showing the player's resources.
 #[derive(Component, Debug)]
@@ -49,6 +49,7 @@ fn spawn_hud(mut commands: Commands) {
 }
 
 fn show_resources(
+    gold: Res<Gold>,
     seeds: Res<SeedStock>,
     pantry: Res<Pantry>,
     farmer: Single<&Mana, With<Farmer>>,
@@ -57,7 +58,8 @@ fn show_resources(
     let mana = *farmer;
 
     text.0 = format!(
-        "Seeds {}   Tomatoes {}   Mana {:.0}/{:.0}",
+        "Gold {}   Seeds {}   Tomatoes {}   Mana {:.0}/{:.0}",
+        gold.amount(),
         seeds.seeds(),
         pantry.tomatoes(),
         mana.current(),

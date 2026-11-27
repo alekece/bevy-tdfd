@@ -34,4 +34,7 @@
             duration: "15s",
         ),
     ),
+    economy: (
+        tomato_price: 5,
+    ),
 )

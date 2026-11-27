@@ -139,7 +139,8 @@ impl Pantry {
         true
     }
 
-    fn store(&mut self, count: u32) {
+    /// Adds `count` tomatoes.
+    pub fn store(&mut self, count: u32) {
         self.tomatoes += count;
     }
 }
