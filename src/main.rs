@@ -1,10 +1,14 @@
+mod farming;
 mod game;
+mod hud;
 mod map;
 mod stage;
 
 use bevy::prelude::*;
 
+use crate::farming::FarmingPlugin;
 use crate::game::GamePlugin;
+use crate::hud::HudPlugin;
 use crate::map::MapPlugin;
 use crate::stage::StagePlugin;
 
@@ -21,6 +25,8 @@ fn main() -> AppExit {
             GamePlugin,
             StagePlugin,
             MapPlugin,
+            FarmingPlugin,
+            HudPlugin,
         ))
         .run()
 }

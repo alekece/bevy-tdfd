@@ -18,4 +18,20 @@
         farmer_start: (-1.0, -4.5),
         rabbit_home: (-7.0, 3.0),
     ),
+    farming: (
+        growth_time: "25s",
+        harvest_yield: 1,
+        action_time: "2s",
+        farmer_speed: 4.0,
+        rabbits: (count: 2, speed: 2.5, harvest_time: "3s", flee_radius: 3.0),
+        mana: (max: 10.0, regeneration: 0.25),
+        tomato_bonus: (regeneration_multiplier: 3.0, duration: "1m"),
+        growth_boost: (
+            mana_cost: 4.0,
+            cast_time: "1500ms",
+            radius: 3.5,
+            growth_multiplier: 3.0,
+            duration: "15s",
+        ),
+    ),
 )

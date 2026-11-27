@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use bevy_common_assets::ron::RonAssetPlugin;
 use serde::Deserialize;
 
+use crate::farming::FarmingConfig;
 use crate::game::{AppState, DifficultySettings, GroundPosition, Timeline};
 
 const LEVEL_PATH: &str = "data/levels/prototype.level.ron";
@@ -27,6 +28,7 @@ pub struct LevelDefinition {
     pub difficulties: DifficultySettings,
     pub timeline: Timeline,
     pub map: MapLayout,
+    pub farming: FarmingConfig,
 }
 
 /// Where things are on the map. Positions are on the ground plane, in world units.
@@ -137,6 +139,7 @@ fn apply_level_definition(
     commands.insert_resource(level.difficulties.clone());
     commands.insert_resource(level.timeline.clone());
     commands.insert_resource(level.map.clone());
+    commands.insert_resource(level.farming.clone());
     info!("Level definition applied");
 
     if *state.get() == AppState::Loading {
