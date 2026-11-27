@@ -56,19 +56,19 @@ These rules take precedence over skill defaults, including those that allow impl
 These rules shape every other Bevy rule below. When a Rust rule seems to conflict with them, they win.
 
 - An entity is the set of its components. Build defenders, enemies, crops and items from behaviour components (`Health`, `Speed`, `Melee`, `Guard`, `Targets`, `Growth`, `Sellable`, ...), not from one component that holds a creature's whole state and logic.
-- Plugins own behaviours (movement, targeting, melee, guarding, growth, trade), never a specific creature, crop or item. Content names (`Ant`, `KnightBunny`, `tomato`) do not appear in systems, queries, messages or configuration fields; they exist only as recipe names in `assets/data/`.
-- Content variants are typed RON recipes. A category marker (`Defender`, `Enemy`, `Crop`) brings the universal defaults with `#[require(..)]`; the recipe lists only what is unique: stats, targets, visual and optional capabilities such as `melee: Some(..)`. Adding a variant needs no Rust. A new behaviour is written in Rust first, then attached from RON.
-- Unique characters (the farmer, the helper rabbits, the peddler) may be defined in Rust, from the same behaviour components, with their numbers in RON.
+- Plugins own behaviours (movement, targeting, melee, guarding, growth, trade), never a specific content variant. Variant names (`Ant`, `KnightBunny`, `tomato`) do not appear in systems, queries, messages or configuration fields; they exist only as recipe names in `assets/data/`.
+- Content variants (defenders, enemies, crops, items) are typed RON recipes. A category marker (`Defender`, `Enemy`, `Crop`) brings its required components with `#[require(..)]`, using defaults that are not design decisions; shared tunable values come from a category section in RON. A recipe lists only what is unique: stats, targets, visual and optional capabilities such as `melee: Some(..)`. Adding a variant needs no Rust. A new behaviour is written in Rust first, then attached from RON.
+- Unique characters and singletons (the farmer, the helper rabbits, the peddler, the crystal) are not variants: they may have their own marker and a plugin that queries it, reuse the same behaviour components, and keep their numbers in RON.
 - Relations between entities are data, not types: who an entity attacks is a component (`Targets::Anyone`, `Targets::Only([..])`) that systems read, so the game can change it at runtime (the Blue Moon).
 - Each agent makes one decision per tick: a small state component picks its intent (follow the path, go to a crop, attack the crystal); generic movement and combat systems carry it out, ordered decide → move → act → resolve with system sets.
 - Spawning copies recipe values into components. Hot reload changes future spawns and restarted levels, never the state of live entities.
-- Content in an approved design under `docs/designs/` is not hypothetical: build the mechanism for it even when a step ships only one instance.
+- Content in an approved design under `docs/designs/` is not hypothetical: when a step touches a behaviour, shape it for the designed variants of that step's content (for example `Targets` with `Only` and `Anyone` even if only `Only` ships). Do not build behaviours the step does not touch.
 
 ### Plugins and boundaries
 
 - One plugin per gameplay responsibility (map, movement, combat, farming, waves, economy, ...), in its own module. A plugin owns its components, resources, messages and systems, and registers them all in its `build`.
 - Plugins talk through a small set of shared components (`Health`, ...), messages, observers, states and system sets; never by querying another plugin's private components. A concept two plugins need moves to a shared module.
-- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor or its data instead of hard-coding the content it serves. Make configurable what actually varies between its real uses.
+- Prefer independent, reusable plugins over interdependent ones. Each plugin exposes a clear public surface others can hook into (components, messages, events, system sets) and is configured through its constructor or its data instead of hard-coding the content it serves. Make configurable what actually varies between its real uses, including the variants in an approved design.
 - When a plugin needs another one, it depends only on that plugin's public surface and says so in its `//!` overview.
 - Keep `main.rs` to app setup: window, default plugins and the list of game plugins.
 - Gate debug-only plugins (inspector, gizmos, cheats) behind the `dev` feature.
@@ -77,7 +77,7 @@ These rules shape every other Bevy rule below. When a Rust rule seems to conflic
 
 - Model game flow with `States` (loading, menu, in a level, results) and sub-states for nested flow (paused, Blue Moon). Gate gameplay systems with `run_if(in_state(..))`.
 - Tag entities spawned for a state with `DespawnOnExit` so leaving the state cleans them up.
-- Order systems with named `SystemSet`s, configured once with `configure_sets`, not with `.after()` chains between plugins. Order explicitly whenever one system reads what another writes in the same frame.
+- Order systems with named `SystemSet`s, configured once with `configure_sets`, not with `.after()` chains between plugins. Whenever one system reads what another writes in the same tick, order them explicitly, inside a plugin too (a set or `.chain()`); conflicting access alone does not define an order.
 - Run simulation (movement, combat, growth, waves) in `FixedUpdate` so it is frame-rate independent and reproducible; keep input, camera and visuals in `Update`.
 - Scale every change over time by `Time` or drive it with a `Timer`; never assume a frame rate.
 

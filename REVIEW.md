@@ -6,9 +6,9 @@ A fresh code reviewer reads this file before reviewing a change (see the [delive
 
 Check correctness, edge cases, tests, maintainability and compliance with the approved design and `AGENTS.md`. For game code, also check:
 
-- **ECS composition:** content-specific names (`Ant`, `KnightBunny`, `tomato`) in a generic plugin's systems, queries, messages or configuration fields are **blocking**. A new defender, enemy or crop variant must be addable as a RON recipe without Rust ([ECS design](AGENTS.md#ecs-design)).
+- **ECS composition:** content variant names (`Ant`, `KnightBunny`, `tomato`) in systems, queries, messages or configuration fields are **blocking**. Unique characters and singletons (farmer, helper rabbits, peddler, crystal) may have their own marker and plugin. A new defender, enemy or crop variant must be addable as a RON recipe without Rust ([ECS design](AGENTS.md#ecs-design)).
 - **Plugin boundaries:** each plugin owns its data and no system queries another plugin's private components. Plugins are independent and reusable: they expose a public surface to communicate with and take configuration through their constructor or data instead of hard-coding the content they serve ([Plugins and boundaries](AGENTS.md#plugins-and-boundaries)).
-- **Scheduling:** systems that read what another writes in the same tick are ordered through sets, including systems inside the same plugin; gameplay systems are gated by state; simulation runs in `FixedUpdate` ([Game flow and scheduling](AGENTS.md#game-flow-and-scheduling)).
+- **Scheduling:** systems that read what another writes in the same tick are ordered explicitly, inside a plugin too; gameplay systems are gated by state; simulation runs in `FixedUpdate` ([Game flow and scheduling](AGENTS.md#game-flow-and-scheduling)).
 - **Query conflicts:** two queries in one system that can borrow the same component mutably must be disjoint (`Without<..>` or a `ParamSet`), or Bevy panics at startup.
 - **Frame independence:** movement, growth and cooldowns use `Time` or a `Timer`, never a per-frame constant.
 - **Entity lifetime:** entities spawned for a level are tagged for cleanup; code tolerates an entity despawned earlier in the frame.
