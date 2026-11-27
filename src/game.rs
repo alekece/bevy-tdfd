@@ -121,8 +121,10 @@ pub enum GameSet {
     Clock,
     /// `FixedUpdate`: entities act (move, grow, attack) and send messages.
     Act,
-    /// `FixedUpdate`: apply the consequences of the actions (damage, deaths, level end).
+    /// `FixedUpdate`: apply the consequences of the actions (damage and deaths).
     Resolve,
+    /// `FixedUpdate`: check for level completion after damage and deaths.
+    Outcome,
     /// `Update`: update visuals and UI from the simulation.
     Presentation,
 }
@@ -181,7 +183,12 @@ impl Plugin for GamePlugin {
             )
             .configure_sets(
                 FixedUpdate,
-                (GameSet::Clock, GameSet::Act, GameSet::Resolve)
+                (
+                    GameSet::Clock,
+                    GameSet::Act,
+                    GameSet::Resolve,
+                    GameSet::Outcome,
+                )
                     .chain()
                     .run_if(in_state(AppState::InLevel)),
             )

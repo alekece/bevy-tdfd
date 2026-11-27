@@ -174,7 +174,7 @@ fn apply_level_definition(
     info!("Level definition applied");
 
     if *state.get() == AppState::Loading {
-        next_state.set(AppState::InLevel);
+        next_state.set(AppState::Menu);
     }
 }
 

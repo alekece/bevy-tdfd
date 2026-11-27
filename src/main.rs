@@ -5,6 +5,7 @@ mod enemies;
 mod farming;
 mod game;
 mod hud;
+mod level_flow;
 mod map;
 mod stage;
 
@@ -17,6 +18,7 @@ use crate::enemies::EnemiesPlugin;
 use crate::farming::FarmingPlugin;
 use crate::game::GamePlugin;
 use crate::hud::HudPlugin;
+use crate::level_flow::LevelFlowPlugin;
 use crate::map::MapPlugin;
 use crate::stage::StagePlugin;
 
@@ -39,6 +41,7 @@ fn main() -> AppExit {
             EnemiesPlugin,
             DefendersPlugin,
             HudPlugin,
+            LevelFlowPlugin,
         ))
         .run()
 }

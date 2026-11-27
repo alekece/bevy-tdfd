@@ -70,9 +70,30 @@ fn show_resources(
     placement: Res<PlacementMode>,
     farmer: Single<&Mana, With<Farmer>>,
     crystal: Query<&Health, With<Crystal>>,
-    mut text: Single<&mut Text, With<ResourcesText>>,
-    mut crystal_text: Single<&mut Text, With<CrystalText>>,
-    mut placement_text: Single<&mut Text, With<PlacementText>>,
+    mut text: Single<
+        &mut Text,
+        (
+            With<ResourcesText>,
+            Without<CrystalText>,
+            Without<PlacementText>,
+        ),
+    >,
+    mut crystal_text: Single<
+        &mut Text,
+        (
+            With<CrystalText>,
+            Without<ResourcesText>,
+            Without<PlacementText>,
+        ),
+    >,
+    mut placement_text: Single<
+        &mut Text,
+        (
+            With<PlacementText>,
+            Without<ResourcesText>,
+            Without<CrystalText>,
+        ),
+    >,
 ) {
     let mana = *farmer;
 
@@ -94,4 +115,26 @@ fn show_resources(
     } else {
         String::new()
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::defenders::PlacementMode;
+    use crate::economy::Gold;
+    use crate::farming::{Pantry, SeedStock};
+    use crate::game::testing::TestApp;
+
+    #[test]
+    fn hud_starts_without_conflicting_text_queries() {
+        let mut app = App::headless();
+
+        app.add_plugins(HudPlugin)
+            .init_resource::<Gold>()
+            .init_resource::<SeedStock>()
+            .init_resource::<Pantry>()
+            .init_resource::<PlacementMode>()
+            .enter(AppState::InLevel);
+        app.update();
+    }
 }
