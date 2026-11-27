@@ -16,6 +16,8 @@ use crate::game::{AppState, DifficultySettings, GameSet, SelectedDifficulty};
 pub struct EconomyConfig {
     /// Gold the peddler pays per tomato.
     pub tomato_price: u32,
+    /// Cost of hiring one Knight Bunny.
+    pub knight_bunny_cost: u32,
 }
 
 /// The player's gold.
@@ -25,6 +27,11 @@ pub struct Gold {
 }
 
 impl Gold {
+    /// Creates a gold purse with `amount`.
+    pub fn with_amount(amount: u32) -> Self {
+        Self { amount }
+    }
+
     pub fn amount(&self) -> u32 {
         self.amount
     }
@@ -62,11 +69,13 @@ impl Plugin for EconomyPlugin {
 }
 
 fn reset_gold(
-    mut gold: ResMut<Gold>,
+    mut commands: Commands,
     difficulties: Res<DifficultySettings>,
     difficulty: Res<SelectedDifficulty>,
 ) {
-    gold.amount = difficulties.starting_resources(difficulty.0).gold;
+    commands.insert_resource(Gold::with_amount(
+        difficulties.starting_resources(difficulty.0).gold,
+    ));
 }
 
 /// `S`: sell tomatoes to the peddler.
@@ -100,7 +109,10 @@ mod tests {
 
         app.add_plugins(EconomyPlugin)
             .init_resource::<Pantry>()
-            .insert_resource(EconomyConfig { tomato_price: 5 })
+            .insert_resource(EconomyConfig {
+                tomato_price: 5,
+                knight_bunny_cost: 5,
+            })
             .insert_resource(DifficultySettings::uniform(StartingResources {
                 seeds: 0,
                 gold,

@@ -9,7 +9,10 @@ use bevy::prelude::*;
 use bevy_common_assets::ron::RonAssetPlugin;
 use serde::Deserialize;
 
+use crate::combat::Health;
+use crate::defenders::KnightBunnyConfig;
 use crate::economy::EconomyConfig;
+use crate::enemies::EnemiesConfig;
 use crate::farming::FarmingConfig;
 use crate::game::{AppState, DifficultySettings, GroundPosition, Timeline};
 
@@ -31,12 +34,16 @@ pub struct LevelDefinition {
     pub map: MapLayout,
     pub farming: FarmingConfig,
     pub economy: EconomyConfig,
+    pub enemies: EnemiesConfig,
+    pub knight_bunny: KnightBunnyConfig,
 }
 
 /// Where things are on the map. Positions are on the ground plane, in world units.
 #[derive(Resource, Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MapLayout {
+    /// Crystal health before it breaks.
+    pub crystal_health: f32,
     pub path: MonsterPath,
     pub plots: Vec<Vec2>,
     pub peddler: Vec2,
@@ -63,6 +70,25 @@ impl MonsterPath {
     /// Every waypoint, from the spawner to the crystal.
     pub fn waypoints(&self) -> &[Vec2] {
         &self.0
+    }
+
+    /// Distance from a point to the nearest path segment.
+    pub fn distance_to(&self, point: Vec2) -> f32 {
+        self.0
+            .windows(2)
+            .map(|segment| {
+                let (start, end) = (segment[0], segment[1]);
+                let direction = end - start;
+                let length_squared = direction.length_squared();
+
+                if length_squared == 0.0 {
+                    return point.distance(start);
+                }
+
+                let along = ((point - start).dot(direction) / length_squared).clamp(0.0, 1.0);
+                point.distance(start + direction * along)
+            })
+            .fold(f32::INFINITY, f32::min)
     }
 }
 
@@ -143,6 +169,8 @@ fn apply_level_definition(
     commands.insert_resource(level.map.clone());
     commands.insert_resource(level.farming.clone());
     commands.insert_resource(level.economy.clone());
+    commands.insert_resource(level.enemies.clone());
+    commands.insert_resource(level.knight_bunny.clone());
     info!("Level definition applied");
 
     if *state.get() == AppState::Loading {
@@ -201,6 +229,7 @@ fn spawn_map(
         MeshMaterial3d(materials.add(CRYSTAL_COLOR)),
         Transform::from_translation(layout.path.crystal().on_ground() + Vec3::Y)
             .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.6, 0.0, 0.6)),
+        Health::new(layout.crystal_health),
         DespawnOnExit(AppState::InLevel),
     ));
 
@@ -216,6 +245,8 @@ fn spawn_map(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::game::Difficulty;
 
@@ -232,6 +263,8 @@ mod tests {
         assert!(level.map.path.waypoints().len() >= 2);
         assert_eq!(level.map.plots.len(), 3);
         assert!(level.timeline.sell_window < level.timeline.length);
+        assert!(!level.enemies.waves.is_empty());
+        assert!(level.farming.growth_time > Duration::ZERO);
 
         for difficulty in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
             assert!(level.difficulties.starting_resources(difficulty).seeds >= 1);
@@ -247,5 +280,16 @@ mod tests {
     fn path_without_a_crystal_waypoint_is_rejected() {
         assert!(ron::from_str::<MonsterPath>("[(0.0, 0.0)]").is_err());
         assert!(ron::from_str::<MonsterPath>("[(0.0, 0.0), (1.0, 0.0)]").is_ok());
+    }
+
+    #[test]
+    fn tomato_plots_are_within_ant_crop_detection_range_of_the_path() {
+        let level = parse(PROTOTYPE_LEVEL).unwrap();
+
+        assert!(
+            level.map.plots.iter().all(
+                |plot| level.map.path.distance_to(*plot) <= level.enemies.crop_detection_radius
+            )
+        );
     }
 }

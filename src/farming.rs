@@ -12,6 +12,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use serde::Deserialize;
 
+use crate::combat::Health;
 use crate::game::{
     AppState, DifficultySettings, GameSet, GroundMovement, GroundPosition, SelectedDifficulty,
 };
@@ -33,6 +34,8 @@ const RIPE_CROP_COLOR: Color = Color::srgb(0.9, 0.15, 0.1);
 #[derive(Resource, Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FarmingConfig {
+    /// Health before a green ant destroys a tomato.
+    pub crop_health: f32,
     /// Time for a planted or harvested tomato to ripen.
     #[serde(with = "humantime_serde")]
     pub growth_time: Duration,
@@ -583,6 +586,7 @@ fn drive_farmer(
                 commands.spawn((
                     Name::new("Tomato"),
                     Crop,
+                    Health::new(config.crop_health),
                     Growth::new(config.growth_time),
                     Mesh3d(assets.crop_mesh.clone()),
                     MeshMaterial3d(assets.growing_material.clone()),
@@ -784,6 +788,7 @@ mod tests {
 
     fn config() -> FarmingConfig {
         FarmingConfig {
+            crop_health: 3.0,
             growth_time: Duration::from_secs(10),
             harvest_yield: 1,
             action_time: SECOND,
@@ -819,6 +824,7 @@ mod tests {
             .init_resource::<CursorGround>()
             .insert_resource(config)
             .insert_resource(MapLayout {
+                crystal_health: 100.0,
                 path: MonsterPath::try_from(vec![Vec2::new(-9.0, 0.0), Vec2::new(9.0, 0.0)])
                     .unwrap(),
                 plots: vec![PLOT_A, PLOT_B],

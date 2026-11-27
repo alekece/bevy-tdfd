@@ -12,13 +12,15 @@
         sell_window: "30s",
     ),
     map: (
+        crystal_health: 100.0,
         path: [(-9.0, -7.0), (-3.0, -7.0), (-3.0, 0.0), (4.0, 0.0), (4.0, 6.0), (8.0, 6.0)],
-        plots: [(-5.5, -3.5), (0.5, -2.5), (1.5, 2.5)],
+        plots: [(-5.5, -4.5), (0.5, -2.5), (1.5, 2.5)],
         peddler: (7.5, -6.0),
         farmer_start: (-1.0, -4.5),
         rabbit_home: (-7.0, 3.0),
     ),
     farming: (
+        crop_health: 3.0,
         growth_time: "25s",
         harvest_yield: 1,
         action_time: "2s",
@@ -36,5 +38,26 @@
     ),
     economy: (
         tomato_price: 5,
+        knight_bunny_cost: 10,
+    ),
+    enemies: (
+        ant_health: 3.0,
+        ant_damage: 1.0,
+        ant_speed: 2.0,
+        crop_detection_radius: 3.0,
+        attack_interval: "1500ms",
+        waves: [
+            (at: "15s", count: 2),
+            (at: "45s", count: 3),
+            (at: "1m 30s", count: 4),
+        ],
+    ),
+    knight_bunny: (
+        health: 12.0,
+        damage: 1.0,
+        action_radius: 3.0,
+        attack_range: 0.7,
+        speed: 3.0,
+        attack_interval: "1s",
     ),
 )

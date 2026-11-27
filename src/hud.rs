@@ -5,15 +5,24 @@
 
 use bevy::prelude::*;
 
+use crate::combat::Health;
+use crate::defenders::PlacementMode;
 use crate::economy::Gold;
 use crate::farming::{Farmer, Mana, Pantry, SeedStock};
 use crate::game::{AppState, GameSet};
+use crate::map::Crystal;
 
-const CONTROLS: &str = "Right click: walk, plant or harvest  |  G: Growth Boost  |  E: eat a tomato  |  S: sell tomatoes";
+const CONTROLS: &str = "Right click: walk, plant or harvest  |  G: Growth Boost  |  E: eat  |  S: sell  |  K + left click: hire";
 
 /// The text showing the player's resources.
 #[derive(Component, Debug)]
 struct ResourcesText;
+
+#[derive(Component, Debug)]
+struct CrystalText;
+
+#[derive(Component, Debug)]
+struct PlacementText;
 
 /// Shows resources and controls during a level.
 pub struct HudPlugin;
@@ -43,7 +52,13 @@ fn spawn_hud(mut commands: Commands) {
                 Text::default(),
                 TextFont::from_font_size(20.0)
             ),
+            (CrystalText, Text::default(), TextFont::from_font_size(16.0)),
             (Text::new(CONTROLS), TextFont::from_font_size(14.0)),
+            (
+                PlacementText,
+                Text::default(),
+                TextFont::from_font_size(14.0)
+            ),
         ],
     ));
 }
@@ -52,8 +67,12 @@ fn show_resources(
     gold: Res<Gold>,
     seeds: Res<SeedStock>,
     pantry: Res<Pantry>,
+    placement: Res<PlacementMode>,
     farmer: Single<&Mana, With<Farmer>>,
+    crystal: Query<&Health, With<Crystal>>,
     mut text: Single<&mut Text, With<ResourcesText>>,
+    mut crystal_text: Single<&mut Text, With<CrystalText>>,
+    mut placement_text: Single<&mut Text, With<PlacementText>>,
 ) {
     let mana = *farmer;
 
@@ -65,4 +84,14 @@ fn show_resources(
         mana.current(),
         mana.max(),
     );
+
+    if let Ok(health) = crystal.single() {
+        crystal_text.0 = format!("Warp Crystal {:.0}/{:.0}", health.current(), health.max());
+    }
+
+    placement_text.0 = if placement.is_active() {
+        "Choose a Knight Bunny position".into()
+    } else {
+        String::new()
+    };
 }

@@ -1,4 +1,7 @@
+mod combat;
+mod defenders;
 mod economy;
+mod enemies;
 mod farming;
 mod game;
 mod hud;
@@ -7,7 +10,10 @@ mod stage;
 
 use bevy::prelude::*;
 
+use crate::combat::CombatPlugin;
+use crate::defenders::DefendersPlugin;
 use crate::economy::EconomyPlugin;
+use crate::enemies::EnemiesPlugin;
 use crate::farming::FarmingPlugin;
 use crate::game::GamePlugin;
 use crate::hud::HudPlugin;
@@ -29,6 +35,9 @@ fn main() -> AppExit {
             MapPlugin,
             FarmingPlugin,
             EconomyPlugin,
+            CombatPlugin,
+            EnemiesPlugin,
+            DefendersPlugin,
             HudPlugin,
         ))
         .run()
