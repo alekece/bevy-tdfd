@@ -6,11 +6,12 @@
 use bevy::prelude::*;
 
 use crate::combat::Health;
-use crate::defenders::PlacementMode;
-use crate::economy::Gold;
-use crate::farming::{Farmer, Mana, Pantry, SeedStock};
+use crate::content::Recipes;
+use crate::economy::{Gold, Inventory};
+use crate::farming::{Farmer, Mana, SeedStock};
 use crate::game::{AppState, GameSet};
 use crate::map::Crystal;
+use crate::recruiting::Placement;
 
 const CONTROLS: &str = "Right click: walk, plant or harvest  |  G: Growth Boost  |  E: eat  |  S: sell  |  K + left click: hire";
 
@@ -66,8 +67,9 @@ fn spawn_hud(mut commands: Commands) {
 fn show_resources(
     gold: Res<Gold>,
     seeds: Res<SeedStock>,
-    pantry: Res<Pantry>,
-    placement: Res<PlacementMode>,
+    inventory: Res<Inventory>,
+    recipes: Res<Recipes>,
+    placement: Res<Placement>,
     farmer: Single<&Mana, With<Farmer>>,
     crystal: Query<&Health, With<Crystal>>,
     mut text: Single<
@@ -96,12 +98,18 @@ fn show_resources(
     >,
 ) {
     let mana = *farmer;
+    let crops = recipes
+        .crops
+        .keys()
+        .map(|crop| format!("{} {}", crop.replace('_', " "), inventory.count(crop)))
+        .collect::<Vec<_>>()
+        .join("   ");
 
     text.0 = format!(
-        "Gold {}   Seeds {}   Tomatoes {}   Mana {:.0}/{:.0}",
+        "Gold {}   Seeds {}   {}   Mana {:.0}/{:.0}",
         gold.amount(),
         seeds.seeds(),
-        pantry.tomatoes(),
+        crops,
         mana.current(),
         mana.max(),
     );
@@ -110,19 +118,17 @@ fn show_resources(
         crystal_text.0 = format!("Warp Crystal {:.0}/{:.0}", health.current(), health.max());
     }
 
-    placement_text.0 = if placement.is_active() {
-        "Choose a Knight Bunny position".into()
-    } else {
-        String::new()
+    placement_text.0 = match &*placement {
+        Placement::Idle => String::new(),
+        Placement::Placing { defender } => {
+            format!("Choose a {} position", defender.replace('_', " "))
+        }
     };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defenders::PlacementMode;
-    use crate::economy::Gold;
-    use crate::farming::{Pantry, SeedStock};
     use crate::game::testing::TestApp;
 
     #[test]
@@ -132,8 +138,9 @@ mod tests {
         app.add_plugins(HudPlugin)
             .init_resource::<Gold>()
             .init_resource::<SeedStock>()
-            .init_resource::<Pantry>()
-            .init_resource::<PlacementMode>()
+            .init_resource::<Inventory>()
+            .init_resource::<Recipes>()
+            .init_resource::<Placement>()
             .enter(AppState::InLevel);
         app.update();
     }

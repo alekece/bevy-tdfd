@@ -1,7 +1,8 @@
 //! The stage: a camera looking down at an angle, a light and a ground plane.
 //!
 //! Also tracks where the mouse cursor points on the ground, so input systems of other plugins can
-//! read [`CursorGround`] instead of querying the camera themselves.
+//! read [`CursorGround`] instead of querying the camera themselves. [`Field`] tells where agents may
+//! walk and be placed.
 
 use bevy::camera::ScalingMode;
 use bevy::prelude::*;
@@ -14,6 +15,25 @@ const GROUND_SIZE: f32 = 20.0;
 const VIEW_WIDTH: f32 = 21.0;
 const VIEW_HEIGHT: f32 = 16.5;
 const GROUND_COLOR: Color = Color::srgb(0.45, 0.7, 0.35);
+
+/// The square of ground agents may walk on and be placed on, centered on the origin.
+#[derive(Debug, Clone, Copy)]
+pub struct Field;
+
+impl Field {
+    /// Half the side of the field, in world units.
+    pub const HALF_SIZE: f32 = 9.5;
+
+    /// Whether `point` is on the field.
+    pub fn contains(point: Vec2) -> bool {
+        point.is_finite() && point.abs().max_element() <= Self::HALF_SIZE
+    }
+
+    /// The point of the field nearest to `point`.
+    pub fn clamp(point: Vec2) -> Vec2 {
+        point.clamp(Vec2::splat(-Self::HALF_SIZE), Vec2::splat(Self::HALF_SIZE))
+    }
+}
 
 /// The point on the ground under the mouse cursor, if any.
 #[derive(Resource, Debug, Default)]

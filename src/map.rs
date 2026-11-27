@@ -1,22 +1,32 @@
 //! Level data and map layout.
 //!
-//! Loads the level definition from a RON asset and shares each section as a resource owned by the
-//! plugin that uses it. When a level starts, spawns the path, plant plots, spawner, crystal and
-//! peddler. Editing the RON file while the game runs re-applies its values (hot reload); positions
-//! take effect the next time a level starts.
+//! Loads the level definition from a RON asset and validates it: a bad value fails the load with a
+//! [`LevelError`] naming its field. The content recipes go to [`RecipeStore`]; every other section is
+//! copied into the resource of the plugin that uses it when a level starts, so editing the file while
+//! the game runs (hot reload) changes the next level, not the running one. Recipes update right away
+//! for future spawns, unless the running level still uses a recipe the new file removes: then they
+//! wait for the next level. When a level starts, spawns the path, plant plots, spawner, crystal and
+//! peddler, and shares the path with movement through [`PathWaypoints`].
+
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy_common_assets::ron::RonAssetPlugin;
 use serde::Deserialize;
+use thiserror::Error;
 
 use crate::combat::Health;
-use crate::defenders::KnightBunnyConfig;
-use crate::economy::EconomyConfig;
-use crate::enemies::EnemiesConfig;
+use crate::content::{AgentRecipe, CropRecipe, MeleeRecipe, RecipeStore, Recipes, Rgb, Shape};
+use crate::economy::Trade;
 use crate::farming::FarmingConfig;
 use crate::game::{AppState, DifficultySettings, GroundPosition, Timeline};
+use crate::movement::PathWaypoints;
+use crate::targeting::Tags;
+use crate::waves::WaveScript;
 
 const LEVEL_PATH: &str = "data/levels/prototype.level.ron";
+const CRYSTAL_TAG: &str = "crystal";
 const PATH_WIDTH: f32 = 0.8;
 const PATH_COLOR: Color = Color::srgb(0.72, 0.6, 0.42);
 const PLOT_SIZE: f32 = 1.4;
@@ -24,6 +34,23 @@ const PLOT_COLOR: Color = Color::srgb(0.4, 0.26, 0.15);
 const SPAWNER_COLOR: Color = Color::srgb(0.2, 0.15, 0.1);
 const CRYSTAL_COLOR: Color = Color::srgb(0.35, 0.65, 1.0);
 const PEDDLER_COLOR: Color = Color::srgb(0.55, 0.35, 0.7);
+
+/// Why a level definition is invalid. Each variant names the offending field.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum LevelError {
+    #[error("{field} must be a finite number")]
+    NotFinite { field: String },
+    #[error("{field} must be greater than zero")]
+    NotPositive { field: String },
+    #[error("{field} names {id:?}, which is not in {section}")]
+    UnknownRecipe {
+        field: String,
+        id: String,
+        section: &'static str,
+    },
+    #[error("trade.sells must offer at least one defender")]
+    NothingForSale,
+}
 
 /// Everything a level is made of, as authored in `assets/data/levels/*.level.ron`.
 #[derive(Asset, TypePath, Debug, Clone, Deserialize)]
@@ -33,9 +60,106 @@ pub struct LevelDefinition {
     pub timeline: Timeline,
     pub map: MapLayout,
     pub farming: FarmingConfig,
-    pub economy: EconomyConfig,
-    pub enemies: EnemiesConfig,
-    pub knight_bunny: KnightBunnyConfig,
+    pub trade: Trade,
+    pub waves: WaveScript,
+    pub recipes: Recipes,
+}
+
+impl LevelDefinition {
+    /// The first recipe the running level uses (its waves, seed or shop) that `recipes` lacks.
+    fn missing_recipe(
+        recipes: &Recipes,
+        waves: &WaveScript,
+        farming: &FarmingConfig,
+        trade: &Trade,
+    ) -> Option<String> {
+        let enemies = waves
+            .waves()
+            .iter()
+            .map(|wave| &wave.enemy)
+            .find(|id| !recipes.enemies.contains_key(*id));
+        let crops = std::iter::once(&farming.seed)
+            .chain(trade.buys.keys())
+            .find(|id| !recipes.crops.contains_key(*id));
+        let defenders = trade
+            .sells
+            .keys()
+            .find(|id| !recipes.defenders.contains_key(*id));
+
+        enemies.or(crops).or(defenders).cloned()
+    }
+
+    fn validate(&self) -> Result<(), LevelError> {
+        self.map.validate("map")?;
+        self.farming.validate("farming")?;
+
+        for (section, agents) in [
+            ("enemies", &self.recipes.enemies),
+            ("defenders", &self.recipes.defenders),
+        ] {
+            for (id, recipe) in agents {
+                recipe.validate(&format!("{section}.{id}"))?;
+            }
+        }
+
+        for (id, recipe) in &self.recipes.crops {
+            recipe.validate(&format!("crops.{id}"))?;
+        }
+
+        for (index, wave) in self.waves.waves().iter().enumerate() {
+            LevelError::require_recipe(
+                &self.recipes.enemies,
+                format!("waves[{index}].enemy"),
+                &wave.enemy,
+                "enemies",
+            )?;
+        }
+
+        LevelError::require_recipe(
+            &self.recipes.crops,
+            "farming.seed".to_owned(),
+            &self.farming.seed,
+            "crops",
+        )?;
+
+        for id in self.trade.buys.keys() {
+            LevelError::require_recipe(&self.recipes.crops, "trade.buys".to_owned(), id, "crops")?;
+        }
+
+        for id in self.trade.sells.keys() {
+            LevelError::require_recipe(
+                &self.recipes.defenders,
+                "trade.sells".to_owned(),
+                id,
+                "defenders",
+            )?;
+        }
+
+        if self.trade.sells.is_empty() {
+            return Err(LevelError::NothingForSale);
+        }
+
+        Ok(())
+    }
+}
+
+impl LevelError {
+    fn require_recipe<T>(
+        recipes: &BTreeMap<String, T>,
+        field: String,
+        id: &str,
+        section: &'static str,
+    ) -> Result<(), Self> {
+        if recipes.contains_key(id) {
+            return Ok(());
+        }
+
+        Err(Self::UnknownRecipe {
+            field,
+            id: id.to_owned(),
+            section,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -45,37 +169,227 @@ struct UnvalidatedLevelDefinition {
     timeline: Timeline,
     map: MapLayout,
     farming: FarmingConfig,
-    economy: EconomyConfig,
-    enemies: EnemiesConfig,
-    knight_bunny: KnightBunnyConfig,
+    trade: Trade,
+    waves: WaveScript,
+    enemies: BTreeMap<String, AgentRecipe>,
+    defenders: BTreeMap<String, AgentRecipe>,
+    crops: BTreeMap<String, CropRecipe>,
 }
 
 impl TryFrom<UnvalidatedLevelDefinition> for LevelDefinition {
-    type Error = String;
+    type Error = LevelError;
 
     fn try_from(level: UnvalidatedLevelDefinition) -> Result<Self, Self::Error> {
-        let growth_multiplier = level.farming.growth_boost.growth_multiplier;
-
-        if !growth_multiplier.is_finite() || growth_multiplier <= 0.0 {
-            return Err(
-                "farming.growth_boost.growth_multiplier must be finite and greater than zero"
-                    .to_owned(),
-            );
-        }
-
-        if !level.map.crystal_health.is_finite() || level.map.crystal_health <= 0.0 {
-            return Err("map.crystal_health must be finite and greater than zero".to_owned());
-        }
-
-        Ok(Self {
+        let level = Self {
             difficulties: level.difficulties,
             timeline: level.timeline,
             map: level.map,
             farming: level.farming,
-            economy: level.economy,
-            enemies: level.enemies,
-            knight_bunny: level.knight_bunny,
+            trade: level.trade,
+            waves: level.waves,
+            recipes: Recipes {
+                enemies: level.enemies,
+                defenders: level.defenders,
+                crops: level.crops,
+            },
+        };
+
+        level.validate()?;
+
+        Ok(level)
+    }
+}
+
+/// A level value that load-time validation checks.
+trait LevelValue {
+    /// Fails unless the value is finite.
+    fn finite(&self, field: &str) -> Result<(), LevelError>;
+
+    /// Fails unless the value is finite and greater than zero.
+    fn positive(&self, field: &str) -> Result<(), LevelError>;
+}
+
+impl LevelValue for f32 {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        if self.is_finite() {
+            return Ok(());
+        }
+
+        Err(LevelError::NotFinite {
+            field: field.to_owned(),
         })
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.finite(field)?;
+
+        if *self > 0.0 {
+            return Ok(());
+        }
+
+        Err(LevelError::NotPositive {
+            field: field.to_owned(),
+        })
+    }
+}
+
+impl LevelValue for Duration {
+    fn finite(&self, _field: &str) -> Result<(), LevelError> {
+        Ok(())
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        if !self.is_zero() {
+            return Ok(());
+        }
+
+        Err(LevelError::NotPositive {
+            field: field.to_owned(),
+        })
+    }
+}
+
+impl LevelValue for Vec2 {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        self.x.finite(field)?;
+        self.y.finite(field)
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.x.positive(field)?;
+        self.y.positive(field)
+    }
+}
+
+impl LevelValue for Rgb {
+    fn finite(&self, field: &str) -> Result<(), LevelError> {
+        self.0.finite(field)?;
+        self.1.finite(field)?;
+        self.2.finite(field)
+    }
+
+    fn positive(&self, field: &str) -> Result<(), LevelError> {
+        self.0.positive(field)?;
+        self.1.positive(field)?;
+        self.2.positive(field)
+    }
+}
+
+/// A section of the level that validates its own fields, named under `field`.
+trait Validate {
+    fn validate(&self, field: &str) -> Result<(), LevelError>;
+}
+
+impl Validate for MapLayout {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.crystal_health
+            .positive(&format!("{field}.crystal_health"))?;
+
+        for (index, waypoint) in self.path.waypoints().iter().enumerate() {
+            waypoint.finite(&format!("{field}.path[{index}]"))?;
+        }
+
+        for (index, plot) in self.plots.iter().enumerate() {
+            plot.finite(&format!("{field}.plots[{index}]"))?;
+        }
+
+        self.peddler.finite(&format!("{field}.peddler"))?;
+        self.farmer_start.finite(&format!("{field}.farmer_start"))?;
+        self.rabbit_home.finite(&format!("{field}.rabbit_home"))
+    }
+}
+
+impl Validate for FarmingConfig {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.action_time.positive(&format!("{field}.action_time"))?;
+        self.farmer_speed
+            .positive(&format!("{field}.farmer_speed"))?;
+
+        let rabbits = &self.rabbits;
+        rabbits.speed.positive(&format!("{field}.rabbits.speed"))?;
+        rabbits
+            .harvest_time
+            .positive(&format!("{field}.rabbits.harvest_time"))?;
+        rabbits
+            .flee_radius
+            .positive(&format!("{field}.rabbits.flee_radius"))?;
+
+        self.mana.max.positive(&format!("{field}.mana.max"))?;
+        self.mana
+            .regeneration
+            .finite(&format!("{field}.mana.regeneration"))?;
+
+        let boost = &self.growth_boost;
+        boost
+            .mana_cost
+            .finite(&format!("{field}.growth_boost.mana_cost"))?;
+        boost
+            .radius
+            .positive(&format!("{field}.growth_boost.radius"))?;
+        boost
+            .growth_multiplier
+            .positive(&format!("{field}.growth_boost.growth_multiplier"))?;
+        boost
+            .duration
+            .positive(&format!("{field}.growth_boost.duration"))
+    }
+}
+
+impl Validate for Shape {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        match *self {
+            Shape::Sphere { radius } => radius.positive(&format!("{field}.radius")),
+            Shape::Capsule { radius, length } => {
+                radius.positive(&format!("{field}.radius"))?;
+                length.positive(&format!("{field}.length"))
+            }
+        }
+    }
+}
+
+impl Validate for MeleeRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.damage.finite(&format!("{field}.damage"))?;
+        self.range.positive(&format!("{field}.range"))?;
+        self.interval.positive(&format!("{field}.interval"))
+    }
+}
+
+impl Validate for AgentRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.health.positive(&format!("{field}.health"))?;
+        self.speed.positive(&format!("{field}.speed"))?;
+        self.sight.positive(&format!("{field}.sight"))?;
+
+        if let Some(melee) = &self.melee {
+            melee.validate(&format!("{field}.melee"))?;
+        }
+
+        self.visual
+            .shape
+            .validate(&format!("{field}.visual.shape"))?;
+        self.visual.color.finite(&format!("{field}.visual.color"))
+    }
+}
+
+impl Validate for CropRecipe {
+    fn validate(&self, field: &str) -> Result<(), LevelError> {
+        self.health.positive(&format!("{field}.health"))?;
+        self.growth_time.positive(&format!("{field}.growth_time"))?;
+
+        if let Some(eat) = &self.eat {
+            eat.regeneration_multiplier
+                .positive(&format!("{field}.eat.regeneration_multiplier"))?;
+            eat.duration.positive(&format!("{field}.eat.duration"))?;
+        }
+
+        self.visual
+            .shape
+            .validate(&format!("{field}.visual.shape"))?;
+        self.visual.color.finite(&format!("{field}.visual.color"))?;
+        self.visual
+            .ripe_color
+            .finite(&format!("{field}.visual.ripe_color"))
     }
 }
 
@@ -92,13 +406,13 @@ pub struct MapLayout {
     pub rabbit_home: Vec2,
 }
 
-/// The route monsters walk, from the spawner to the crystal. Always has at least two waypoints.
+/// The route enemies walk, from the spawner to the crystal. Always has at least two waypoints.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "Vec<Vec2>")]
 pub struct MonsterPath(Vec<Vec2>);
 
 impl MonsterPath {
-    /// Where monsters appear.
+    /// Where enemies appear.
     pub fn spawner(&self) -> Vec2 {
         self.0[0]
     }
@@ -114,7 +428,8 @@ impl MonsterPath {
     }
 
     /// Distance from a point to the nearest path segment.
-    pub fn distance_to(&self, point: Vec2) -> f32 {
+    #[cfg(test)]
+    fn distance_to(&self, point: Vec2) -> f32 {
         self.0
             .windows(2)
             .map(|segment| {
@@ -127,6 +442,7 @@ impl MonsterPath {
                 }
 
                 let along = ((point - start).dot(direction) / length_squared).clamp(0.0, 1.0);
+
                 point.distance(start + direction * along)
             })
             .fold(f32::INFINITY, f32::min)
@@ -138,7 +454,7 @@ impl TryFrom<Vec<Vec2>> for MonsterPath {
 
     fn try_from(waypoints: Vec<Vec2>) -> Result<Self, Self::Error> {
         if waypoints.len() < 2 {
-            return Err("a monster path needs a spawner and a crystal waypoint");
+            return Err("map.path needs a spawner and a crystal waypoint");
         }
 
         Ok(Self(waypoints))
@@ -149,11 +465,11 @@ impl TryFrom<Vec<Vec2>> for MonsterPath {
 #[derive(Component, Debug)]
 pub struct PlantPlot;
 
-/// Where monsters appear.
+/// Where enemies appear.
 #[derive(Component, Debug)]
 pub struct Spawner;
 
-/// The crystal monsters try to destroy.
+/// The crystal enemies try to destroy.
 #[derive(Component, Debug)]
 pub struct Crystal;
 
@@ -172,7 +488,10 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(RonAssetPlugin::<LevelDefinition>::new(&["level.ron"]))
             .add_systems(Startup, load_level)
-            .add_systems(Update, apply_level_definition)
+            .add_systems(Update, apply_reloaded_level)
+            // Copying on exit makes the sections visible to every `OnEnter(InLevel)` system.
+            .add_systems(OnExit(AppState::Menu), apply_level)
+            .add_systems(OnExit(AppState::Results), apply_level)
             .add_systems(OnEnter(AppState::InLevel), spawn_map);
     }
 }
@@ -181,19 +500,41 @@ fn load_level(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(CurrentLevel(asset_server.load(LEVEL_PATH)));
 }
 
-/// Shares each section of the level as a resource, on first load and on every hot reload.
-fn apply_level_definition(
+/// Copies every section of the current level into resources and replaces the recipes.
+fn apply_level(
+    mut commands: Commands,
+    current_level: Res<CurrentLevel>,
+    levels: Res<Assets<LevelDefinition>>,
+    mut store: RecipeStore,
+) {
+    let Some(level) = levels.get(&current_level.0) else {
+        return;
+    };
+
+    commands.insert_resource(level.difficulties.clone());
+    commands.insert_resource(level.timeline.clone());
+    commands.insert_resource(level.map.clone());
+    commands.insert_resource(level.farming.clone());
+    commands.insert_resource(level.trade.clone());
+    commands.insert_resource(level.waves.clone());
+    store.replace(level.recipes.clone());
+}
+
+/// Applies the level on first load and the recipes of every valid hot reload.
+fn apply_reloaded_level(
     mut commands: Commands,
     mut asset_events: MessageReader<AssetEvent<LevelDefinition>>,
     current_level: Res<CurrentLevel>,
     levels: Res<Assets<LevelDefinition>>,
     state: Res<State<AppState>>,
     mut next_state: ResMut<NextState<AppState>>,
+    running: RunningLevel,
+    mut store: RecipeStore,
 ) {
     let reloaded = asset_events.read().any(|event| match event {
-        AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
-            *id == current_level.0.id()
-        }
+        AssetEvent::Added { id }
+        | AssetEvent::LoadedWithDependencies { id }
+        | AssetEvent::Modified { id } => *id == current_level.0.id(),
         _ => false,
     });
 
@@ -205,17 +546,53 @@ fn apply_level_definition(
         return;
     };
 
-    commands.insert_resource(level.difficulties.clone());
-    commands.insert_resource(level.timeline.clone());
-    commands.insert_resource(level.map.clone());
-    commands.insert_resource(level.farming.clone());
-    commands.insert_resource(level.economy.clone());
-    commands.insert_resource(level.enemies.clone());
-    commands.insert_resource(level.knight_bunny.clone());
-    info!("Level definition applied");
+    match state.get() {
+        AppState::Loading => {
+            commands.insert_resource(level.difficulties.clone());
+            commands.insert_resource(level.timeline.clone());
+            commands.insert_resource(level.map.clone());
+            commands.insert_resource(level.farming.clone());
+            commands.insert_resource(level.trade.clone());
+            commands.insert_resource(level.waves.clone());
+            next_state.set(AppState::Menu);
+        }
+        AppState::InLevel => {
+            if let Some(id) = running.missing_recipe(&level.recipes) {
+                warn!(
+                    "The running level still uses recipe {id:?}; new recipes apply when the next \
+                     level starts"
+                );
 
-    if *state.get() == AppState::Loading {
-        next_state.set(AppState::Menu);
+                return;
+            }
+        }
+        AppState::Menu | AppState::Results => {}
+    }
+
+    if store.recipes() != &level.recipes {
+        store.replace(level.recipes.clone());
+    }
+
+    info!("Level definition applied");
+}
+
+/// The sections of the running level that name recipes.
+#[derive(bevy::ecs::system::SystemParam)]
+struct RunningLevel<'w> {
+    waves: Option<Res<'w, WaveScript>>,
+    farming: Option<Res<'w, FarmingConfig>>,
+    trade: Option<Res<'w, Trade>>,
+}
+
+impl RunningLevel<'_> {
+    /// The first recipe the running level uses that `recipes` lacks.
+    fn missing_recipe(&self, recipes: &Recipes) -> Option<String> {
+        let (Some(waves), Some(farming), Some(trade)) = (&self.waves, &self.farming, &self.trade)
+        else {
+            return None;
+        };
+
+        LevelDefinition::missing_recipe(recipes, waves, farming, trade)
     }
 }
 
@@ -225,6 +602,8 @@ fn spawn_map(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    commands.insert_resource(PathWaypoints(layout.path.waypoints().to_vec()));
+
     let path_material = materials.add(PATH_COLOR);
 
     for segment in layout.path.waypoints().windows(2) {
@@ -266,6 +645,7 @@ fn spawn_map(
     commands.spawn((
         Name::new("Crystal"),
         Crystal,
+        Tags::new([CRYSTAL_TAG]),
         Mesh3d(meshes.add(Cuboid::from_length(0.9))),
         MeshMaterial3d(materials.add(CRYSTAL_COLOR)),
         Transform::from_translation(layout.path.crystal().on_ground() + Vec3::Y)
@@ -284,12 +664,33 @@ fn spawn_map(
     ));
 }
 
+/// Map values shared by tests of plugins that need a layout.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// A straight path from (-9, 0) to (9, 0) and no plots.
+    pub fn layout() -> MapLayout {
+        MapLayout {
+            crystal_health: 100.0,
+            path: MonsterPath::try_from(vec![Vec2::new(-9.0, 0.0), Vec2::new(9.0, 0.0)]).unwrap(),
+            plots: vec![],
+            peddler: Vec2::ZERO,
+            farmer_start: Vec2::ZERO,
+            rabbit_home: Vec2::ZERO,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
+    use crate::content::ContentPlugin;
+    use crate::content::Roaming;
+    use crate::economy::EconomyPlugin;
     use crate::game::Difficulty;
+    use crate::game::testing::TestApp;
+    use crate::waves::WavesPlugin;
 
     const PROTOTYPE_LEVEL: &str = include_str!("../assets/data/levels/prototype.level.ron");
 
@@ -297,15 +698,28 @@ mod tests {
         ron::from_str(source)
     }
 
+    fn error(source: &str) -> String {
+        parse(source).unwrap_err().to_string()
+    }
+
     #[test]
-    fn prototype_level_has_one_path_three_plots_and_a_timeline() {
+    fn prototype_level_parses_and_references_resolve() {
         let level = parse(PROTOTYPE_LEVEL).unwrap();
 
         assert!(level.map.path.waypoints().len() >= 2);
         assert_eq!(level.map.plots.len(), 3);
         assert!(level.timeline.sell_window < level.timeline.length);
-        assert!(!level.enemies.waves.is_empty());
-        assert!(level.farming.growth_time > Duration::ZERO);
+        assert!(!level.waves.waves().is_empty());
+        assert!(!level.trade.sells.is_empty());
+        assert_eq!(
+            LevelDefinition::missing_recipe(
+                &level.recipes,
+                &level.waves,
+                &level.farming,
+                &level.trade
+            ),
+            None
+        );
 
         for difficulty in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
             assert!(level.difficulties.starting_resources(difficulty).seeds >= 1);
@@ -313,12 +727,33 @@ mod tests {
     }
 
     #[test]
-    fn hard_difficulty_can_afford_a_knight_bunny_at_level_start() {
+    fn hard_difficulty_can_afford_a_defender_at_level_start() {
         let level = parse(PROTOTYPE_LEVEL).unwrap();
         let hard = level.difficulties.starting_resources(Difficulty::Hard);
+        let cheapest = level.trade.sells.values().min().unwrap();
 
         assert!(hard.seeds >= 1);
-        assert!(hard.gold >= level.economy.knight_bunny_cost);
+        assert!(hard.gold >= *cheapest);
+    }
+
+    #[test]
+    fn prototype_plots_are_in_sight_of_path_followers() {
+        let level = parse(PROTOTYPE_LEVEL).unwrap();
+        let followers = level
+            .recipes
+            .enemies
+            .values()
+            .filter(|recipe| recipe.movement == Roaming::FollowPath);
+
+        for follower in followers {
+            assert!(
+                level
+                    .map
+                    .plots
+                    .iter()
+                    .all(|plot| level.map.path.distance_to(*plot) <= follower.sight)
+            );
+        }
     }
 
     #[test]
@@ -327,19 +762,53 @@ mod tests {
     }
 
     #[test]
-    fn nonpositive_growth_multiplier_is_a_field_specific_error() {
-        let invalid = PROTOTYPE_LEVEL.replace("growth_multiplier: 3.0", "growth_multiplier: -1.0");
-        let error = parse(&invalid).unwrap_err().to_string();
+    fn zero_health_names_the_field() {
+        let invalid = PROTOTYPE_LEVEL.replacen("health: 3.0", "health: 0.0", 1);
 
-        assert!(error.contains("farming.growth_boost.growth_multiplier"));
+        assert!(error(&invalid).contains("enemies.green_ant.health must be greater than zero"));
+    }
+
+    #[test]
+    fn unknown_wave_enemy_names_the_field() {
+        let invalid = PROTOTYPE_LEVEL.replacen(r#"enemy: "green_ant""#, r#"enemy: "red_ant""#, 1);
+
+        assert!(error(&invalid).contains(r#"waves[0].enemy names "red_ant""#));
+    }
+
+    #[test]
+    fn unknown_seed_names_the_field() {
+        let invalid = PROTOTYPE_LEVEL.replace(r#"seed: "tomato""#, r#"seed: "carrot""#);
+
+        assert!(error(&invalid).contains("farming.seed"));
+    }
+
+    #[test]
+    fn nothing_for_sale_is_rejected() {
+        let invalid = PROTOTYPE_LEVEL.replace(r#"sells: {"knight_bunny": 10}"#, "sells: {}");
+
+        assert!(error(&invalid).contains("trade.sells must offer at least one defender"));
+    }
+
+    #[test]
+    fn bad_growth_multiplier_is_rejected() {
+        for value in ["-1.0", "0.0", "NaN", "inf"] {
+            let invalid = PROTOTYPE_LEVEL.replace(
+                "growth_multiplier: 3.0",
+                &format!("growth_multiplier: {value}"),
+            );
+
+            assert!(
+                error(&invalid).contains("farming.growth_boost.growth_multiplier"),
+                "{value} should be rejected"
+            );
+        }
     }
 
     #[test]
     fn nonpositive_crystal_health_is_a_field_specific_error() {
         let invalid = PROTOTYPE_LEVEL.replace("crystal_health: 100.0", "crystal_health: 0.0");
-        let error = parse(&invalid).unwrap_err().to_string();
 
-        assert!(error.contains("map.crystal_health"));
+        assert!(error(&invalid).contains("map.crystal_health"));
     }
 
     #[test]
@@ -348,14 +817,106 @@ mod tests {
         assert!(ron::from_str::<MonsterPath>("[(0.0, 0.0), (1.0, 0.0)]").is_ok());
     }
 
-    #[test]
-    fn tomato_plots_are_within_ant_crop_detection_range_of_the_path() {
-        let level = parse(PROTOTYPE_LEVEL).unwrap();
+    fn level_app() -> (App, Handle<LevelDefinition>) {
+        let mut app = App::headless();
+        app.add_plugins((MapPlugin, ContentPlugin, WavesPlugin, EconomyPlugin));
 
-        assert!(
-            level.map.plots.iter().all(
-                |plot| level.map.path.distance_to(*plot) <= level.enemies.crop_detection_radius
-            )
+        let level = app
+            .world_mut()
+            .resource_mut::<Assets<LevelDefinition>>()
+            .add(parse(PROTOTYPE_LEVEL).unwrap());
+        app.insert_resource(CurrentLevel(level.clone()));
+        // Frame 1 emits the asset event, frame 2 reads it and requests Menu, frame 3 enters Menu.
+        app.update();
+        app.update();
+        app.update();
+
+        (app, level)
+    }
+
+    fn reload(
+        app: &mut App,
+        handle: &Handle<LevelDefinition>,
+        edit: impl FnOnce(&mut LevelDefinition),
+    ) {
+        let mut assets = app.world_mut().resource_mut::<Assets<LevelDefinition>>();
+        let mut level = assets.get(handle).unwrap().clone();
+        edit(&mut level);
+        assets.insert(handle.id(), level).unwrap();
+        // The modified event is emitted at the end of one frame and read in the next.
+        app.update();
+        app.update();
+    }
+
+    fn rename_green_ant(level: &mut LevelDefinition) {
+        let recipe = level.recipes.enemies.remove("green_ant").unwrap();
+        level.recipes.enemies.insert("red_ant".to_owned(), recipe);
+        level.waves = WaveScript::from(
+            level
+                .waves
+                .waves()
+                .iter()
+                .cloned()
+                .map(|mut wave| {
+                    wave.enemy = "red_ant".to_owned();
+                    wave
+                })
+                .collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn first_load_applies_the_level_and_opens_the_menu() {
+        let (app, _) = level_app();
+
+        assert_eq!(
+            *app.world().resource::<State<AppState>>().get(),
+            AppState::Menu
+        );
+        assert!(
+            app.world()
+                .resource::<Recipes>()
+                .enemies
+                .contains_key("green_ant")
+        );
+        assert!(app.world().contains_resource::<FarmingConfig>());
+    }
+
+    #[test]
+    fn mid_level_rename_is_deferred() {
+        let (mut app, handle) = level_app();
+        app.enter(AppState::InLevel);
+
+        reload(&mut app, &handle, rename_green_ant);
+
+        let recipes = app.world().resource::<Recipes>();
+        assert!(recipes.enemies.contains_key("green_ant"));
+        assert!(!recipes.enemies.contains_key("red_ant"));
+
+        app.enter(AppState::Results).enter(AppState::InLevel);
+
+        let recipes = app.world().resource::<Recipes>();
+        assert!(recipes.enemies.contains_key("red_ant"));
+        assert_eq!(
+            app.world().resource::<WaveScript>().waves()[0].enemy,
+            "red_ant"
+        );
+    }
+
+    #[test]
+    fn mid_level_stat_change_applies_to_recipes_only() {
+        let (mut app, handle) = level_app();
+        app.enter(AppState::InLevel);
+
+        reload(&mut app, &handle, |level| {
+            level.recipes.enemies.get_mut("green_ant").unwrap().health = 7.0;
+            level.map.crystal_health = 50.0;
+        });
+
+        assert_eq!(
+            app.world().resource::<Recipes>().enemies["green_ant"].health,
+            7.0
+        );
+        assert_eq!(app.world().resource::<MapLayout>().crystal_health, 100.0);
     }
 }

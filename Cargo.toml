@@ -13,6 +13,7 @@ bevy = "0.20.1"
 bevy_common_assets = { version = "0.18", features = ["ron"] }
 humantime-serde = "1.1.1"
 serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
 
 # Bevy systems routinely take many parameters and nested query types; Bevy allows these too.
 [lints.clippy]

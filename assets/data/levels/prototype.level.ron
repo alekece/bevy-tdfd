@@ -1,6 +1,9 @@
-// Prototype level: one path, three tomato plots, green ants.
-// Values are playtest defaults, not final balance. Edit while the game runs to hot reload them.
-// Positions are (x, z) on the ground plane in world units; durations use "30s" or "1m 30s".
+// Prototype level: one path, three tomato plots, green ants and Knight Bunnies.
+// Values are playtest defaults, not final balance. Edit while the game runs to hot reload them:
+// recipes (enemies, defenders, crops) change future spawns, every other section the next level.
+// Positions are (x, z) on the ground plane in world units; distances, radii and ranges are in world
+// units; speeds in world units per second; durations use "30s", "1500ms" or "1m 30s".
+// Colors are sRGB (red, green, blue) from 0.0 to 1.0.
 (
     difficulties: (
         easy: (seeds: 5, gold: 30),
@@ -20,14 +23,18 @@
         rabbit_home: (-7.0, 3.0),
     ),
     farming: (
-        crop_health: 3.0,
-        growth_time: "25s",
-        harvest_yield: 1,
+        // The crop recipe the farmer plants.
+        seed: "tomato",
         action_time: "2s",
         farmer_speed: 4.0,
-        rabbits: (count: 2, speed: 2.5, harvest_time: "3s", flee_radius: 3.0),
+        rabbits: (
+            count: 2,
+            speed: 2.5,
+            harvest_time: "3s",
+            flee_radius: 3.0,
+            flee_from: Only(["enemy"]),
+        ),
         mana: (max: 10.0, regeneration: 0.25),
-        tomato_bonus: (regeneration_multiplier: 3.0, duration: "1m"),
         growth_boost: (
             mana_cost: 4.0,
             cast_time: "1500ms",
@@ -36,28 +43,50 @@
             duration: "15s",
         ),
     ),
-    economy: (
-        tomato_price: 5,
-        knight_bunny_cost: 10,
+    // Gold per item. The peddler buys harvested crops and sells defenders; `K` offers the first one.
+    trade: (
+        buys: {"tomato": 5},
+        sells: {"knight_bunny": 10},
     ),
-    enemies: (
-        ant_health: 3.0,
-        ant_damage: 1.0,
-        ant_speed: 2.0,
-        crop_detection_radius: 3.0,
-        attack_interval: "1500ms",
-        waves: [
-            (at: "15s", count: 2),
-            (at: "45s", count: 3),
-            (at: "1m 30s", count: 4),
-        ],
-    ),
-    knight_bunny: (
-        health: 12.0,
-        damage: 1.0,
-        action_radius: 3.0,
-        attack_range: 0.7,
-        speed: 3.0,
-        attack_interval: "1s",
-    ),
+    // Sorted by time when loaded.
+    waves: [
+        (at: "15s", enemy: "green_ant", count: 2),
+        (at: "45s", enemy: "green_ant", count: 3),
+        (at: "1m 30s", enemy: "green_ant", count: 4),
+    ],
+    // Agents target entities by tag: every spawned entity is tagged with its category ("enemy",
+    // "defender", "crop") and its id; the crystal is tagged "crystal". Earlier tags in `Only` win.
+    enemies: {
+        "green_ant": (
+            health: 3.0,
+            speed: 2.0,
+            sight: 3.0,
+            targets: Only(["crop", "crystal"]),
+            movement: FollowPath,
+            melee: Some((damage: 1.0, range: 0.65, interval: "1500ms")),
+            visual: (shape: Sphere(radius: 0.35), color: (0.1, 0.48, 0.16)),
+        ),
+    },
+    defenders: {
+        "knight_bunny": (
+            health: 12.0,
+            speed: 3.0,
+            // Also the radius of the guarded area; areas cannot overlap.
+            sight: 3.0,
+            targets: Only(["enemy"]),
+            movement: Guard,
+            melee: Some((damage: 1.0, range: 0.7, interval: "1s")),
+            visual: (shape: Capsule(radius: 0.3, length: 0.6), color: (0.86, 0.68, 0.28)),
+        ),
+    },
+    crops: {
+        "tomato": (
+            health: 3.0,
+            growth_time: "25s",
+            yield: 1,
+            // Eating one multiplies mana regeneration for a while.
+            eat: Some((regeneration_multiplier: 3.0, duration: "1m")),
+            visual: (shape: Sphere(radius: 0.35), color: (0.3, 0.75, 0.25), ripe_color: (0.9, 0.15, 0.1)),
+        ),
+    },
 )

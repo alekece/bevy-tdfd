@@ -10,12 +10,12 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::combat::Health;
-use crate::enemies::EnemiesConfig;
 use crate::game::{
     AppState, Difficulty, GameSet, LevelClock, LevelOutcome, LevelStatus, SelectedDifficulty,
     Timeline,
 };
 use crate::map::Crystal;
+use crate::waves::WaveScript;
 
 const MENU_BACKGROUND: Color = Color::srgb(0.13, 0.18, 0.2);
 const BUTTON_COLOR: Color = Color::srgb(0.28, 0.44, 0.34);
@@ -234,18 +234,25 @@ fn spawn_timeline(mut commands: Commands) {
 fn update_timeline(
     clock: Res<LevelClock>,
     timeline: Res<Timeline>,
-    enemies: Res<EnemiesConfig>,
+    waves: Res<WaveScript>,
     mut text: Single<&mut Text, With<TimelineText>>,
 ) {
     let elapsed = clock.elapsed();
     let time_label =
         |time: Duration| format!("{:02}:{:02}", time.as_secs() / 60, time.as_secs() % 60);
-    let next_waves = enemies
-        .waves
+    let next_waves = waves
+        .waves()
         .iter()
         .filter(|wave| wave.at > elapsed)
         .take(3)
-        .map(|wave| format!("{} ant(s) at {}", wave.count, time_label(wave.at)))
+        .map(|wave| {
+            format!(
+                "{} {} at {}",
+                wave.count,
+                wave.enemy.replace('_', " "),
+                time_label(wave.at)
+            )
+        })
         .collect::<Vec<_>>()
         .join("  |  ");
     let phase = if elapsed >= timeline.sell_window_start() {
@@ -368,17 +375,20 @@ mod tests {
 
     use super::*;
     use crate::combat::{CombatPlugin, Health};
-    use crate::economy::{EconomyConfig, EconomyPlugin, Gold};
-    use crate::enemies::{AntWave, EnemiesConfig};
+    use crate::content::ContentPlugin;
+    use crate::economy::{EconomyPlugin, Gold};
     use crate::farming::{
-        FarmingConfig, FarmingPlugin, GrowthBoost, ManaConfig, RabbitConfig, SeedStock, TomatoBonus,
+        FarmingConfig, FarmingPlugin, GrowthBoost, ManaConfig, RabbitConfig, SeedStock,
     };
     use crate::game::{
         AppState, Difficulty, DifficultySettings, SelectedDifficulty, Timeline,
         testing::{STEP, TestApp},
     };
-    use crate::map::{Crystal, MapLayout, MonsterPath};
+    use crate::map::Crystal;
+    use crate::map::testing::layout;
     use crate::stage::CursorGround;
+    use crate::targeting::Targets;
+    use crate::waves::Wave;
 
     fn timeline() -> Timeline {
         Timeline {
@@ -387,18 +397,12 @@ mod tests {
         }
     }
 
-    fn enemies() -> EnemiesConfig {
-        EnemiesConfig {
-            ant_health: 3.0,
-            ant_damage: 1.0,
-            ant_speed: 2.0,
-            crop_detection_radius: 3.0,
-            attack_interval: Duration::from_secs(1),
-            waves: vec![AntWave {
-                at: Duration::from_secs(1),
-                count: 1,
-            }],
-        }
+    fn waves() -> WaveScript {
+        WaveScript::from(vec![Wave {
+            at: Duration::from_secs(1),
+            enemy: "a".to_owned(),
+            count: 1,
+        }])
     }
 
     fn flow_app() -> App {
@@ -406,7 +410,7 @@ mod tests {
 
         app.add_plugins((CombatPlugin, LevelFlowPlugin))
             .insert_resource(timeline())
-            .insert_resource(enemies());
+            .insert_resource(waves());
         app.world_mut().spawn((
             Crystal,
             Health::new(100.0),
@@ -424,12 +428,13 @@ mod tests {
         )
         .unwrap();
 
-        app.add_plugins((LevelFlowPlugin, FarmingPlugin, EconomyPlugin))
+        let mut layout = layout();
+        layout.plots = vec![Vec2::ZERO];
+
+        app.add_plugins((LevelFlowPlugin, FarmingPlugin, EconomyPlugin, ContentPlugin))
             .init_resource::<CursorGround>()
             .insert_resource(FarmingConfig {
-                crop_health: 3.0,
-                growth_time: Duration::from_secs(10),
-                harvest_yield: 1,
+                seed: "a".to_owned(),
                 action_time: Duration::from_secs(1),
                 farmer_speed: 2.0,
                 rabbits: RabbitConfig {
@@ -437,14 +442,11 @@ mod tests {
                     speed: 2.0,
                     harvest_time: Duration::from_secs(1),
                     flee_radius: 3.0,
+                    flee_from: Targets::Anyone,
                 },
                 mana: ManaConfig {
                     max: 10.0,
                     regeneration: 1.0,
-                },
-                tomato_bonus: TomatoBonus {
-                    regeneration_multiplier: 3.0,
-                    duration: Duration::from_secs(5),
                 },
                 growth_boost: GrowthBoost {
                     mana_cost: 1.0,
@@ -454,21 +456,10 @@ mod tests {
                     duration: Duration::from_secs(5),
                 },
             })
-            .insert_resource(EconomyConfig {
-                tomato_price: 5,
-                knight_bunny_cost: 5,
-            })
             .insert_resource(difficulties)
             .insert_resource(timeline())
-            .insert_resource(enemies())
-            .insert_resource(MapLayout {
-                crystal_health: 100.0,
-                path: MonsterPath::try_from(vec![Vec2::ZERO, Vec2::new(5.0, 0.0)]).unwrap(),
-                plots: vec![Vec2::ZERO],
-                peddler: Vec2::ZERO,
-                farmer_start: Vec2::ZERO,
-                rabbit_home: Vec2::ZERO,
-            })
+            .insert_resource(waves())
+            .insert_resource(layout)
             .enter(AppState::Menu);
 
         app

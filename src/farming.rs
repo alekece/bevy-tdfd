@@ -1,45 +1,46 @@
-//! Farming: the farmer, the farmer rabbits and the crops.
+//! Farming: the farmer, the farmer rabbits, seeds and mana.
 //!
-//! Owns crop growth, the farmer's orders (walk, plant, harvest, cast Growth Boost), mana, the seed
-//! stock and the pantry of harvested crops. Farmer rabbits harvest ripe crops on their own and run
-//! from any entity marked [`Threat`].
+//! Owns the farmer's orders (walk, plant, harvest, cast Growth Boost), mana, the seed stock and the
+//! farmer rabbits that harvest ripe crops on their own. The farmer plants the crop recipe the level
+//! names as its seed; harvests go into the economy's [`Inventory`], and eating (`E`) consumes the
+//! first edible item for its recipe's mana bonus.
 //!
-//! Other plugins see crops through the [`Crop`] marker, spend harvested crops through [`Pantry`], and
-//! mark dangerous entities with [`Threat`]. Starting seeds come from the selected difficulty.
+//! The farmer and rabbits decide in [`GameSet::Decide`] by writing an [`Intent`] that movement carries
+//! out, and work in [`GameSet::Act`] after [`GrowthSet`], so a crop ripening this tick can be
+//! harvested this tick. Rabbits flee anything whose [`Tags`] match their configured `flee_from`.
+//! Starting seeds come from the selected difficulty.
 
 use std::time::Duration;
 
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use crate::combat::Health;
+use crate::content::{Crop, RecipeVisuals, Recipes};
+use crate::economy::Inventory;
 use crate::game::{AppState, DifficultySettings, GameSet, GroundPosition, SelectedDifficulty};
+use crate::growth::{Boosted, Growth, GrowthSet, Yield};
 use crate::map::{MapLayout, PlantPlot};
-use crate::movement::GroundMovement;
-use crate::stage::CursorGround;
+use crate::movement::{Intent, Speed};
+use crate::stage::{CursorGround, Field};
+use crate::targeting::{Tags, Targets};
 
 /// How close a rabbit gets to a crop or its home to work there, in world units.
 const REACH: f32 = 0.6;
+/// Slack on arrival checks, so stopping exactly at a distance still counts, in world units.
+const ARRIVAL_TOLERANCE: f32 = 0.01;
 /// How far from a plot's center a click or a crop still counts as on the plot, in world units.
 const PLOT_RADIUS: f32 = 0.8;
-/// Half the size of the walkable field, in world units.
-const FIELD_HALF_SIZE: f32 = 9.5;
+/// Distance between rabbits at their home, in world units.
+const RABBIT_SPACING: f32 = 0.8;
 const FARMER_COLOR: Color = Color::srgb(0.85, 0.55, 0.3);
 const RABBIT_COLOR: Color = Color::srgb(0.95, 0.95, 0.9);
-const GROWING_CROP_COLOR: Color = Color::srgb(0.3, 0.75, 0.25);
-const RIPE_CROP_COLOR: Color = Color::srgb(0.9, 0.15, 0.1);
 
 /// Farming values of a level.
-#[derive(Resource, Debug, Clone, Deserialize)]
+#[derive(Resource, Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FarmingConfig {
-    /// Health before a green ant destroys a tomato.
-    pub crop_health: f32,
-    /// Time for a planted or harvested tomato to ripen.
-    #[serde(with = "humantime_serde")]
-    pub growth_time: Duration,
-    /// Tomatoes gained per harvest.
-    pub harvest_yield: u32,
+    /// Id of the crop recipe the farmer plants.
+    pub seed: String,
     /// Time the farmer spends planting or harvesting.
     #[serde(with = "humantime_serde")]
     pub action_time: Duration,
@@ -47,12 +48,11 @@ pub struct FarmingConfig {
     pub farmer_speed: f32,
     pub rabbits: RabbitConfig,
     pub mana: ManaConfig,
-    pub tomato_bonus: TomatoBonus,
     pub growth_boost: GrowthBoost,
 }
 
 /// Farmer rabbit values.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RabbitConfig {
     pub count: u32,
@@ -60,12 +60,14 @@ pub struct RabbitConfig {
     pub speed: f32,
     #[serde(with = "humantime_serde")]
     pub harvest_time: Duration,
-    /// Rabbits run from threats closer than this, in world units.
+    /// Rabbits run from what they flee closer than this, in world units.
     pub flee_radius: f32,
+    /// What rabbits run from.
+    pub flee_from: Targets,
 }
 
 /// The farmer's mana pool.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManaConfig {
     pub max: f32,
@@ -73,17 +75,8 @@ pub struct ManaConfig {
     pub regeneration: f32,
 }
 
-/// Eating a tomato multiplies mana regeneration for a while.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TomatoBonus {
-    pub regeneration_multiplier: f32,
-    #[serde(with = "humantime_serde")]
-    pub duration: Duration,
-}
-
 /// The Growth Boost spell: crops around the farmer grow faster for a while.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrowthBoost {
     pub mana_cost: f32,
@@ -119,37 +112,9 @@ impl SeedStock {
     }
 }
 
-/// Harvested tomatoes waiting to be sold or eaten.
-#[derive(Resource, Debug, Default)]
-pub struct Pantry {
-    tomatoes: u32,
-}
-
-impl Pantry {
-    pub fn tomatoes(&self) -> u32 {
-        self.tomatoes
-    }
-
-    /// Takes `count` tomatoes, or none if there are fewer.
-    pub fn take(&mut self, count: u32) -> bool {
-        let Some(tomatoes) = self.tomatoes.checked_sub(count) else {
-            return false;
-        };
-
-        self.tomatoes = tomatoes;
-
-        true
-    }
-
-    /// Adds `count` tomatoes.
-    pub fn store(&mut self, count: u32) {
-        self.tomatoes += count;
-    }
-}
-
 /// The player's farmer.
 #[derive(Component, Debug)]
-#[require(FarmerOrder)]
+#[require(FarmerOrder, Intent)]
 pub struct Farmer;
 
 /// The farmer's mana.
@@ -191,7 +156,7 @@ impl Mana {
     }
 }
 
-/// Temporarily multiplies mana regeneration, after eating a tomato.
+/// Temporarily multiplies mana regeneration, after eating.
 #[derive(Component, Debug)]
 struct RegenerationBonus {
     multiplier: f32,
@@ -242,12 +207,21 @@ impl FarmerAction {
             FarmerAction::CastGrowthBoost => config.growth_boost.cast_time,
         }
     }
+
+    fn start(self, config: &FarmingConfig) -> FarmerOrder {
+        FarmerOrder::Work {
+            action: self,
+            timer: Timer::new(self.duration(config), TimerMode::Once),
+        }
+    }
 }
 
 /// A farmer rabbit that harvests ripe crops on its own.
 #[derive(Component, Debug)]
-#[require(RabbitTask)]
-pub struct FarmerRabbit;
+#[require(RabbitTask, Intent)]
+pub struct FarmerRabbit {
+    home: Vec2,
+}
 
 #[derive(Component, Debug, Default)]
 enum RabbitTask {
@@ -259,73 +233,26 @@ enum RabbitTask {
     },
 }
 
-/// Something farmer rabbits run away from.
-#[derive(Component, Debug, Default)]
-pub struct Threat;
-
-/// A planted crop.
-#[derive(Component, Debug)]
-pub struct Crop;
-
-/// Growth of a crop towards ripeness.
-#[derive(Component, Debug)]
-struct Growth {
-    timer: Timer,
-}
-
-impl Growth {
-    fn new(growth_time: Duration) -> Self {
-        Self {
-            timer: Timer::new(growth_time, TimerMode::Once),
+impl RabbitTask {
+    fn crop(&self) -> Option<Entity> {
+        match self {
+            RabbitTask::Harvest { crop, .. } => Some(*crop),
+            RabbitTask::Idle => None,
         }
     }
-
-    fn advance(&mut self, delta: Duration) {
-        self.timer.tick(delta);
-    }
-
-    fn is_ripe(&self) -> bool {
-        self.timer.is_finished()
-    }
-
-    fn progress(&self) -> f32 {
-        self.timer.fraction()
-    }
-
-    /// Picks a ripe crop and sends it back to its first growth stage. Returns whether there was
-    /// anything to pick.
-    fn harvest(&mut self) -> bool {
-        if !self.is_ripe() {
-            return false;
-        }
-
-        self.timer.reset();
-
-        true
-    }
 }
 
-/// Faster growth from a Growth Boost.
-#[derive(Component, Debug)]
-struct Boosted {
-    multiplier: f32,
-    timer: Timer,
-}
-
-/// The farmer eats a tomato from the pantry to boost mana regeneration.
+/// The farmer eats the first edible item of the inventory to boost mana regeneration.
 #[derive(Event, Debug)]
-pub struct EatTomato;
+pub struct Eat;
 
-/// Meshes and materials shared by every farming entity.
+/// Meshes and materials shared by the farmer and the rabbits.
 #[derive(Resource, Debug)]
 struct FarmingAssets {
     farmer_mesh: Handle<Mesh>,
     farmer_material: Handle<StandardMaterial>,
     rabbit_mesh: Handle<Mesh>,
     rabbit_material: Handle<StandardMaterial>,
-    crop_mesh: Handle<Mesh>,
-    growing_material: Handle<StandardMaterial>,
-    ripe_material: Handle<StandardMaterial>,
 }
 
 impl FromWorld for FarmingAssets {
@@ -333,8 +260,6 @@ impl FromWorld for FarmingAssets {
         let mut meshes = world.resource_mut::<Assets<Mesh>>();
         let farmer_mesh = meshes.add(Capsule3d::new(0.3, 0.7));
         let rabbit_mesh = meshes.add(Capsule3d::new(0.18, 0.3));
-        let crop_mesh = meshes.add(Sphere::new(0.35).mesh().ico(1).expect("valid subdivisions"));
-
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
 
         Self {
@@ -342,33 +267,33 @@ impl FromWorld for FarmingAssets {
             farmer_material: materials.add(FARMER_COLOR),
             rabbit_mesh,
             rabbit_material: materials.add(RABBIT_COLOR),
-            crop_mesh,
-            growing_material: materials.add(GROWING_CROP_COLOR),
-            ripe_material: materials.add(RIPE_CROP_COLOR),
         }
     }
 }
 
-/// Runs the farm: the farmer, farmer rabbits and crops.
+/// Runs the farm: the farmer, farmer rabbits, seeds and mana.
 pub struct FarmingPlugin;
 
 impl Plugin for FarmingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SeedStock>()
-            .init_resource::<Pantry>()
             .init_resource::<FarmingAssets>()
-            .add_observer(eat_tomato)
+            .add_observer(eat)
             .add_systems(OnEnter(AppState::InLevel), start_farm)
             .add_systems(
                 Update,
-                (
-                    (order_farmer, cast_growth_boost, request_tomato).in_set(GameSet::Input),
-                    show_crop_growth.in_set(GameSet::Presentation),
-                ),
+                (order_farmer, cast_growth_boost, request_eating).in_set(GameSet::Input),
             )
             .add_systems(
                 FixedUpdate,
-                (drive_farmer, drive_rabbits, grow_crops, regenerate_mana).in_set(GameSet::Act),
+                (
+                    (steer_farmer, steer_rabbits).in_set(GameSet::Decide),
+                    (work_farmer, harvest_with_rabbits)
+                        .chain()
+                        .in_set(GameSet::Act)
+                        .after(GrowthSet),
+                    regenerate_mana.in_set(GameSet::Act),
+                ),
             );
     }
 }
@@ -386,13 +311,13 @@ fn start_farm(
     commands.insert_resource(SeedStock {
         seeds: starting.seeds,
     });
-    commands.insert_resource(Pantry::default());
 
     let first_plot = layout.plots.first().copied();
 
     commands.spawn((
         Name::new("Farmer"),
         Farmer,
+        Speed(config.farmer_speed),
         Mana::full(config.mana.max),
         first_plot.map_or_else(FarmerOrder::default, |plot| FarmerOrder::Walk {
             to: plot,
@@ -405,14 +330,15 @@ fn start_farm(
     ));
 
     for index in 0..config.rabbits.count {
-        let offset = Vec2::new(index as f32 * 0.8, 0.0);
+        let home = layout.rabbit_home + Vec2::X * (index as f32 * RABBIT_SPACING);
 
         commands.spawn((
             Name::new("Farmer rabbit"),
-            FarmerRabbit,
+            FarmerRabbit { home },
+            Speed(config.rabbits.speed),
             Mesh3d(assets.rabbit_mesh.clone()),
             MeshMaterial3d(assets.rabbit_material.clone()),
-            Transform::from_translation((layout.rabbit_home + offset).on_ground()),
+            Transform::from_translation(home.on_ground()),
             DespawnOnExit(AppState::InLevel),
         ));
     }
@@ -486,78 +412,171 @@ fn cast_growth_boost(
 
     if !mana.can_spend(config.growth_boost.mana_cost) {
         info!("Not enough mana for Growth Boost");
+
         return;
     }
 
-    let action = FarmerAction::CastGrowthBoost;
-    let cast = FarmerOrder::Work {
-        action,
-        timer: Timer::new(action.duration(&config), TimerMode::Once),
-    };
-
-    if !order.replace(cast) {
+    if !order.replace(FarmerAction::CastGrowthBoost.start(&config)) {
         info!("The farmer is busy");
     }
 }
 
-/// `E`: eat a tomato.
-fn request_tomato(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
+/// `E`: eat something.
+fn request_eating(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
     if keys.just_pressed(KeyCode::KeyE) {
-        commands.trigger(EatTomato);
+        commands.trigger(Eat);
     }
 }
 
-fn eat_tomato(
-    _: On<EatTomato>,
+fn eat(
+    _: On<Eat>,
     mut commands: Commands,
-    config: Res<FarmingConfig>,
-    mut pantry: ResMut<Pantry>,
+    recipes: Res<Recipes>,
+    mut inventory: ResMut<Inventory>,
     farmer: Query<Entity, With<Farmer>>,
 ) {
     let Ok(farmer) = farmer.single() else {
         return;
     };
 
-    if !pantry.take(1) {
-        info!("No tomato to eat");
-        return;
-    }
+    let edible = inventory.iter().find_map(|(item, _)| {
+        let effect = recipes.crops.get(item)?.eat?;
 
+        Some((item.to_owned(), effect))
+    });
+
+    let Some((item, effect)) = edible else {
+        info!("Nothing to eat");
+
+        return;
+    };
+
+    inventory.take(&item);
     commands.entity(farmer).insert(RegenerationBonus {
-        multiplier: config.tomato_bonus.regeneration_multiplier,
-        timer: Timer::new(config.tomato_bonus.duration, TimerMode::Once),
+        multiplier: effect.regeneration_multiplier,
+        timer: Timer::new(effect.duration, TimerMode::Once),
     });
 }
 
-fn drive_farmer(
+/// Walks the farmer towards the destination of its order.
+fn steer_farmer(mut farmer: Query<(&FarmerOrder, &mut Intent), With<Farmer>>) {
+    for (order, mut intent) in &mut farmer {
+        let wanted = match order {
+            FarmerOrder::Walk { to, .. } => Intent::MoveTo(*to),
+            FarmerOrder::Idle | FarmerOrder::Work { .. } => Intent::Idle,
+        };
+
+        intent.set_if_neq(wanted);
+    }
+}
+
+/// Each rabbit flees, approaches the nearest unclaimed ripe crop, or heads home.
+fn steer_rabbits(
+    config: Res<FarmingConfig>,
+    dangers: Query<(&Tags, &Transform)>,
+    crops: Query<(Entity, &Transform, &Growth), With<Crop>>,
+    mut rabbits: Query<(&FarmerRabbit, &Transform, &mut RabbitTask, &mut Intent)>,
+    mut claimed_crops: Local<Vec<Entity>>,
+) {
+    let rabbit_config = &config.rabbits;
+
+    claimed_crops.clear();
+    claimed_crops.extend(rabbits.iter().filter_map(|(_, _, task, _)| task.crop()));
+
+    for (rabbit, transform, mut task, mut intent) in &mut rabbits {
+        let position = transform.translation.xz();
+        let nearest_danger = dangers
+            .iter()
+            .filter(|(tags, _)| rabbit_config.flee_from.matches(tags))
+            .map(|(_, danger)| danger.translation.xz())
+            .filter(|danger| danger.distance(position) < rabbit_config.flee_radius)
+            .min_by(|a, b| a.distance(position).total_cmp(&b.distance(position)));
+
+        if let Some(danger) = nearest_danger {
+            let away = (position - danger).normalize_or(Vec2::X);
+
+            *task = RabbitTask::Idle;
+            intent.set_if_neq(Intent::MoveTo(Field::clamp(
+                position + away * rabbit_config.flee_radius,
+            )));
+
+            continue;
+        }
+
+        if let RabbitTask::Harvest { crop, .. } = *task {
+            let still_ripe = crops.get(crop).is_ok_and(|(_, _, growth)| growth.is_ripe());
+
+            if still_ripe {
+                intent.set_if_neq(Intent::Approach {
+                    target: crop,
+                    within: REACH,
+                });
+
+                continue;
+            }
+
+            *task = RabbitTask::Idle;
+        }
+
+        let nearest_ripe_crop = crops
+            .iter()
+            .filter(|(crop, _, growth)| growth.is_ripe() && !claimed_crops.contains(crop))
+            .min_by(|(_, a, _), (_, b, _)| {
+                let a = a.translation.xz().distance(position);
+                let b = b.translation.xz().distance(position);
+
+                a.total_cmp(&b)
+            });
+
+        if let Some((crop, _, _)) = nearest_ripe_crop {
+            claimed_crops.push(crop);
+            *task = RabbitTask::Harvest {
+                crop,
+                work: Timer::new(rabbit_config.harvest_time, TimerMode::Once),
+            };
+            intent.set_if_neq(Intent::Approach {
+                target: crop,
+                within: REACH,
+            });
+
+            continue;
+        }
+
+        let wanted = if position.distance(rabbit.home) > REACH {
+            Intent::MoveTo(rabbit.home)
+        } else {
+            Intent::Idle
+        };
+
+        intent.set_if_neq(wanted);
+    }
+}
+
+fn work_farmer(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<FarmingConfig>,
-    assets: Res<FarmingAssets>,
+    recipes: Res<Recipes>,
+    visuals: Res<RecipeVisuals>,
     mut seeds: ResMut<SeedStock>,
-    mut pantry: ResMut<Pantry>,
-    farmer: Single<(&mut Transform, &mut FarmerOrder, &mut Mana), With<Farmer>>,
-    plots: Query<&Transform, (With<PlantPlot>, Without<Farmer>, Without<Crop>)>,
-    mut crops: Query<(Entity, &Transform, &mut Growth), (With<Crop>, Without<Farmer>)>,
+    mut inventory: ResMut<Inventory>,
+    farmer: Single<(&Transform, &mut FarmerOrder, &mut Mana), With<Farmer>>,
+    plots: Query<&Transform, With<PlantPlot>>,
+    mut crops: Query<(Entity, &Transform, &mut Growth, &Yield), With<Crop>>,
 ) {
-    let (mut transform, mut order, mut mana) = farmer.into_inner();
+    let (transform, mut order, mut mana) = farmer.into_inner();
+    let position = transform.translation.xz();
 
     let finished_action = match &mut *order {
         FarmerOrder::Idle => None,
         FarmerOrder::Walk { to, then } => {
-            let step = config.farmer_speed * time.delta_secs();
-
-            if !transform.move_towards(*to, step, 0.0) {
+            if position.distance(*to) > ARRIVAL_TOLERANCE {
                 return;
             }
 
-            *order = match then.take() {
-                Some(action) => FarmerOrder::Work {
-                    action,
-                    timer: Timer::new(action.duration(&config), TimerMode::Once),
-                },
-                None => FarmerOrder::Idle,
-            };
+            *order = then
+                .take()
+                .map_or(FarmerOrder::Idle, |action| action.start(&config));
 
             None
         }
@@ -579,26 +598,24 @@ fn drive_farmer(
                 .any(|candidate| candidate.translation.xz().distance(plot) < PLOT_RADIUS);
             let occupied = crops
                 .iter()
-                .any(|(_, crop, _)| crop.translation.xz().distance(plot) < PLOT_RADIUS);
+                .any(|(_, crop, ..)| crop.translation.xz().distance(plot) < PLOT_RADIUS);
 
-            if plot_exists && !occupied && seeds.take_one() {
-                commands.spawn((
-                    Name::new("Tomato"),
-                    Crop,
-                    Health::new(config.crop_health),
-                    Growth::new(config.growth_time),
-                    Mesh3d(assets.crop_mesh.clone()),
-                    MeshMaterial3d(assets.growing_material.clone()),
-                    Transform::from_translation(plot.on_ground() + Vec3::Y * 0.3),
-                    DespawnOnExit(AppState::InLevel),
-                ));
+            if !plot_exists || occupied || seeds.seeds() == 0 {
+                return;
+            }
+
+            if recipes
+                .spawn_crop(&mut commands, &visuals, &config.seed, plot)
+                .is_some()
+            {
+                seeds.take_one();
             }
         }
         FarmerAction::Harvest { crop } => {
-            if let Ok((_, _, mut growth)) = crops.get_mut(crop)
+            if let Ok((_, _, mut growth, harvest)) = crops.get_mut(crop)
                 && growth.harvest()
             {
-                pantry.store(config.harvest_yield);
+                inventory.add(&harvest.item, harvest.amount);
             }
         }
         FarmerAction::CastGrowthBoost => {
@@ -606,127 +623,48 @@ fn drive_farmer(
                 return;
             }
 
-            let center = transform.translation.xz();
             let boost = &config.growth_boost;
 
-            for (crop, crop_transform, _) in &crops {
-                if crop_transform.translation.xz().distance(center) <= boost.radius {
-                    commands.entity(crop).insert(Boosted {
-                        multiplier: boost.growth_multiplier,
-                        timer: Timer::new(boost.duration, TimerMode::Once),
-                    });
+            for (crop, crop_transform, ..) in &crops {
+                if crop_transform.translation.xz().distance(position) <= boost.radius {
+                    commands
+                        .entity(crop)
+                        .insert(Boosted::new(boost.growth_multiplier, boost.duration));
                 }
             }
         }
     }
 }
 
-fn drive_rabbits(
+fn harvest_with_rabbits(
     time: Res<Time>,
-    config: Res<FarmingConfig>,
-    layout: Res<MapLayout>,
-    mut pantry: ResMut<Pantry>,
-    mut claimed_crops: Local<Vec<Entity>>,
-    threats: Query<&Transform, (With<Threat>, Without<FarmerRabbit>)>,
-    mut rabbits: Query<(&mut Transform, &mut RabbitTask), With<FarmerRabbit>>,
-    mut crops: Query<(Entity, &Transform, &mut Growth), (With<Crop>, Without<FarmerRabbit>)>,
+    mut inventory: ResMut<Inventory>,
+    mut rabbits: Query<(&Transform, &mut RabbitTask), With<FarmerRabbit>>,
+    mut crops: Query<(&Transform, &mut Growth, &Yield), (With<Crop>, Without<FarmerRabbit>)>,
 ) {
-    let rabbit_config = &config.rabbits;
-    let step = rabbit_config.speed * time.delta_secs();
-
-    claimed_crops.clear();
-    claimed_crops.extend(rabbits.iter().filter_map(|(_, task)| match task {
-        RabbitTask::Harvest { crop, .. } => Some(*crop),
-        RabbitTask::Idle => None,
-    }));
-
-    for (mut transform, mut task) in &mut rabbits {
-        let position = transform.translation.xz();
-        let nearest_threat = threats
-            .iter()
-            .map(|threat| threat.translation.xz())
-            .filter(|threat| threat.distance(position) < rabbit_config.flee_radius)
-            .min_by(|a, b| a.distance(position).total_cmp(&b.distance(position)));
-
-        if let Some(threat) = nearest_threat {
-            let away = (position - threat).normalize_or(Vec2::X);
-            let target = (position + away * step)
-                .clamp(Vec2::splat(-FIELD_HALF_SIZE), Vec2::splat(FIELD_HALF_SIZE));
-
-            transform.move_towards(target, step, 0.0);
-            *task = RabbitTask::Idle;
-
-            continue;
-        }
-
-        match &mut *task {
-            RabbitTask::Idle => {
-                let nearest_ripe_crop = crops
-                    .iter()
-                    .filter(|(crop, _, growth)| growth.is_ripe() && !claimed_crops.contains(crop))
-                    .min_by(|(_, a, _), (_, b, _)| {
-                        let a = a.translation.xz().distance(position);
-                        let b = b.translation.xz().distance(position);
-
-                        a.total_cmp(&b)
-                    });
-
-                match nearest_ripe_crop {
-                    Some((crop, _, _)) => {
-                        claimed_crops.push(crop);
-                        *task = RabbitTask::Harvest {
-                            crop,
-                            work: Timer::new(rabbit_config.harvest_time, TimerMode::Once),
-                        };
-                    }
-                    None => {
-                        transform.move_towards(layout.rabbit_home, step, REACH);
-                    }
-                }
-            }
-            RabbitTask::Harvest { crop, work } => {
-                let Ok((_, crop_transform, mut growth)) = crops.get_mut(*crop) else {
-                    *task = RabbitTask::Idle;
-                    continue;
-                };
-
-                if !growth.is_ripe() {
-                    *task = RabbitTask::Idle;
-                    continue;
-                }
-
-                if !transform.move_towards(crop_transform.translation.xz(), step, REACH) {
-                    continue;
-                }
-
-                if work.tick(time.delta()).is_finished() {
-                    if growth.harvest() {
-                        pantry.store(config.harvest_yield);
-                    }
-
-                    *task = RabbitTask::Idle;
-                }
-            }
-        }
-    }
-}
-
-fn grow_crops(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut crops: Query<(Entity, &mut Growth, Option<&mut Boosted>)>,
-) {
-    for (crop, mut growth, boosted) in &mut crops {
-        let Some(mut boosted) = boosted else {
-            growth.advance(time.delta());
+    for (transform, mut task) in &mut rabbits {
+        let RabbitTask::Harvest { crop, work } = &mut *task else {
             continue;
         };
 
-        growth.advance(time.delta().mul_f32(boosted.multiplier));
+        let Ok((crop_transform, mut growth, harvest)) = crops.get_mut(*crop) else {
+            continue;
+        };
 
-        if boosted.timer.tick(time.delta()).is_finished() {
-            commands.entity(crop).remove::<Boosted>();
+        let distance = transform
+            .translation
+            .xz()
+            .distance(crop_transform.translation.xz());
+
+        if distance > REACH + ARRIVAL_TOLERANCE || !work.tick(time.delta()).is_finished() {
+            continue;
         }
+
+        if growth.harvest() {
+            inventory.add(&harvest.item, harvest.amount);
+        }
+
+        *task = RabbitTask::Idle;
     }
 }
 
@@ -751,35 +689,18 @@ fn regenerate_mana(
     }
 }
 
-fn show_crop_growth(
-    assets: Res<FarmingAssets>,
-    mut crops: Query<(
-        &Growth,
-        &mut Transform,
-        &mut MeshMaterial3d<StandardMaterial>,
-    )>,
-) {
-    for (growth, mut transform, mut material) in &mut crops {
-        transform.scale = Vec3::splat(0.4 + 0.6 * growth.progress());
-
-        let wanted = if growth.is_ripe() {
-            &assets.ripe_material
-        } else {
-            &assets.growing_material
-        };
-
-        if material.0 != *wanted {
-            material.0 = wanted.clone();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::content::testing::{RecipeApp, crop};
+    use crate::economy::EconomyPlugin;
     use crate::game::StartingResources;
-    use crate::game::testing::TestApp;
-    use crate::map::MonsterPath;
+    use crate::game::testing::{STEP, TestApp};
+    use crate::growth::GrowthPlugin;
+    use crate::map::testing::layout;
+    use crate::movement::MovementPlugin;
 
     const PLOT_A: Vec2 = Vec2::new(0.0, 0.0);
     const PLOT_B: Vec2 = Vec2::new(6.0, 0.0);
@@ -787,9 +708,7 @@ mod tests {
 
     fn config() -> FarmingConfig {
         FarmingConfig {
-            crop_health: 3.0,
-            growth_time: Duration::from_secs(10),
-            harvest_yield: 1,
+            seed: "a".to_owned(),
             action_time: SECOND,
             farmer_speed: 100.0,
             rabbits: RabbitConfig {
@@ -797,14 +716,11 @@ mod tests {
                 speed: 2.0,
                 harvest_time: SECOND,
                 flee_radius: 3.0,
+                flee_from: Targets::Only(vec!["enemy".to_owned()]),
             },
             mana: ManaConfig {
                 max: 10.0,
                 regeneration: 1.0,
-            },
-            tomato_bonus: TomatoBonus {
-                regeneration_multiplier: 3.0,
-                duration: Duration::from_secs(5),
             },
             growth_boost: GrowthBoost {
                 mana_cost: 4.0,
@@ -818,19 +734,19 @@ mod tests {
 
     fn farm_app(config: FarmingConfig, seeds: u32) -> App {
         let mut app = App::headless();
+        let mut layout = layout();
+        layout.plots = vec![PLOT_A, PLOT_B];
+        layout.farmer_start = PLOT_A;
+        layout.rabbit_home = Vec2::new(0.0, 8.0);
 
-        app.add_plugins(FarmingPlugin)
+        app.add_plugins((FarmingPlugin, GrowthPlugin, EconomyPlugin, MovementPlugin))
+            .with_recipes(Recipes {
+                crops: BTreeMap::from([("a".to_owned(), crop(Duration::from_secs(10)))]),
+                ..default()
+            })
             .init_resource::<CursorGround>()
             .insert_resource(config)
-            .insert_resource(MapLayout {
-                crystal_health: 100.0,
-                path: MonsterPath::try_from(vec![Vec2::new(-9.0, 0.0), Vec2::new(9.0, 0.0)])
-                    .unwrap(),
-                plots: vec![PLOT_A, PLOT_B],
-                peddler: Vec2::ZERO,
-                farmer_start: PLOT_A,
-                rabbit_home: Vec2::new(0.0, 8.0),
-            })
+            .insert_resource(layout)
             .insert_resource(DifficultySettings::uniform(StartingResources {
                 seeds,
                 gold: 0,
@@ -882,6 +798,10 @@ mod tests {
         app.world().get::<Mana>(farmer).unwrap().current()
     }
 
+    fn harvested(app: &App) -> u32 {
+        app.world().resource::<Inventory>().count("a")
+    }
+
     #[test]
     fn planting_requires_and_consumes_a_seed() {
         let mut app = farm_app(config(), 1);
@@ -900,6 +820,19 @@ mod tests {
     }
 
     #[test]
+    fn planted_crop_comes_from_the_seed_recipe() {
+        let mut app = farm_app(config(), 1);
+
+        app.advance_by(2 * SECOND);
+
+        let crop = crops(&mut app)[0];
+        assert_eq!(
+            app.world().get::<Tags>(crop),
+            Some(&Tags::new(["crop", "a"]))
+        );
+    }
+
+    #[test]
     fn harvesting_resets_crop_growth_and_awards_one_yield() {
         let mut app = farm_app(config(), 1);
 
@@ -913,11 +846,37 @@ mod tests {
         let growth = app.world().get::<Growth>(crop).unwrap();
         assert!(!growth.is_ripe());
         assert!(growth.progress() < 0.2);
-        assert_eq!(app.world().resource::<Pantry>().tomatoes(), 1);
+        assert_eq!(harvested(&app), 1);
 
         order(&mut app, walk_and(PLOT_A, FarmerAction::Harvest { crop }));
         app.advance_by(2 * SECOND);
-        assert_eq!(app.world().resource::<Pantry>().tomatoes(), 1);
+        assert_eq!(harvested(&app), 1);
+    }
+
+    #[test]
+    fn crop_ripening_this_tick_is_harvested_this_tick() {
+        let mut app = farm_app(config(), 0);
+        let crop = app
+            .world_mut()
+            .spawn((
+                Crop,
+                Growth::new(STEP),
+                Yield {
+                    item: "a".to_owned(),
+                    amount: 1,
+                },
+                Transform::from_translation(PLOT_B.on_ground()),
+            ))
+            .id();
+        let farmer = farmer(&mut app);
+        *app.world_mut().get_mut::<FarmerOrder>(farmer).unwrap() = FarmerOrder::Work {
+            action: FarmerAction::Harvest { crop },
+            timer: Timer::new(STEP, TimerMode::Once),
+        };
+
+        app.update();
+
+        assert_eq!(harvested(&app), 1);
     }
 
     #[test]
@@ -939,18 +898,18 @@ mod tests {
     }
 
     #[test]
-    fn eating_tomato_boosts_mana_regeneration_for_configured_duration() {
+    fn eating_boosts_mana_regeneration_for_the_recipe_duration() {
         let mut config = config();
         config.mana.max = 100.0;
         let mut app = farm_app(config, 0);
         let farmer = farmer(&mut app);
 
         app.world_mut().get_mut::<Mana>(farmer).unwrap().current = 0.0;
-        app.world_mut().resource_mut::<Pantry>().store(1);
-        app.world_mut().trigger(EatTomato);
+        app.world_mut().resource_mut::<Inventory>().add("a", 1);
+        app.world_mut().trigger(Eat);
         app.advance_by(SECOND);
         assert!((mana(&mut app) - 3.0).abs() < 0.1);
-        assert_eq!(app.world().resource::<Pantry>().tomatoes(), 0);
+        assert_eq!(harvested(&app), 0);
 
         // The bonus lasts five seconds, then regeneration is back to normal.
         app.advance_by(5 * SECOND);
@@ -958,10 +917,14 @@ mod tests {
         app.advance_by(SECOND);
         assert!((mana(&mut app) - before - 1.0).abs() < 0.1);
 
-        // Without a tomato there is nothing to eat.
-        app.world_mut().trigger(EatTomato);
+        // Without anything edible there is nothing to eat.
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .add("inedible", 1);
+        app.world_mut().trigger(Eat);
         app.update();
         assert!(app.world().get::<RegenerationBonus>(farmer).is_none());
+        assert_eq!(app.world().resource::<Inventory>().count("inedible"), 1);
     }
 
     #[test]
@@ -1004,27 +967,38 @@ mod tests {
 
         // Ten seconds to ripen, four to walk from home, one to harvest.
         app.advance_by(17 * SECOND);
-        assert_eq!(app.world().resource::<Pantry>().tomatoes(), 1);
+        assert_eq!(harvested(&app), 1);
     }
 
     #[test]
-    fn rabbits_move_away_from_threats() {
+    fn rabbits_flee_matching_tags() {
         let mut config = config();
         config.rabbits.count = 1;
         let mut app = farm_app(config, 0);
-        let threat = Vec2::new(0.0, 7.0);
+        let danger = Vec2::new(0.0, 7.0);
+        let rabbit_position = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<&Transform, With<FarmerRabbit>>()
+                .single(app.world())
+                .unwrap()
+                .translation
+                .xz()
+        };
+
+        let bystander = app
+            .world_mut()
+            .spawn((
+                Tags::new(["b"]),
+                Transform::from_translation(danger.on_ground()),
+            ))
+            .id();
+        app.advance_by(SECOND);
+        assert!(rabbit_position(&mut app).distance(danger) < 1.5);
 
         app.world_mut()
-            .spawn((Threat, Transform::from_translation(threat.on_ground())));
+            .entity_mut(bystander)
+            .insert(Tags::new(["enemy"]));
         app.advance_by(SECOND);
-
-        let rabbit = app
-            .world_mut()
-            .query_filtered::<&Transform, With<FarmerRabbit>>()
-            .single(app.world())
-            .unwrap()
-            .translation
-            .xz();
-        assert!(rabbit.distance(threat) > 1.5);
+        assert!(rabbit_position(&mut app).distance(danger) > 1.5);
     }
 }

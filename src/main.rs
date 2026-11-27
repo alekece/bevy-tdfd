@@ -1,32 +1,36 @@
 mod combat;
-mod defenders;
+mod content;
 mod economy;
-mod enemies;
 mod farming;
 mod game;
+mod growth;
 mod guarding;
 mod hud;
 mod level_flow;
 mod map;
 mod movement;
+mod recruiting;
 mod stage;
 mod targeting;
+mod waves;
 
 use bevy::prelude::*;
 
 use crate::combat::CombatPlugin;
-use crate::defenders::DefendersPlugin;
+use crate::content::ContentPlugin;
 use crate::economy::EconomyPlugin;
-use crate::enemies::EnemiesPlugin;
 use crate::farming::FarmingPlugin;
 use crate::game::GamePlugin;
+use crate::growth::GrowthPlugin;
 use crate::guarding::GuardingPlugin;
 use crate::hud::HudPlugin;
 use crate::level_flow::LevelFlowPlugin;
 use crate::map::MapPlugin;
 use crate::movement::MovementPlugin;
+use crate::recruiting::RecruitingPlugin;
 use crate::stage::StagePlugin;
 use crate::targeting::TargetingPlugin;
+use crate::waves::WavesPlugin;
 
 fn main() -> AppExit {
     App::new()
@@ -38,17 +42,16 @@ fn main() -> AppExit {
                 }),
                 ..default()
             }),
-            GamePlugin,
-            StagePlugin,
-            MapPlugin,
+            (GamePlugin, StagePlugin, MapPlugin, ContentPlugin),
             MovementPlugin,
             TargetingPlugin,
             GuardingPlugin,
-            FarmingPlugin,
-            EconomyPlugin,
             CombatPlugin,
-            EnemiesPlugin,
-            DefendersPlugin,
+            GrowthPlugin,
+            EconomyPlugin,
+            WavesPlugin,
+            FarmingPlugin,
+            RecruitingPlugin,
             HudPlugin,
             LevelFlowPlugin,
         ))
